@@ -20,6 +20,7 @@ from .const import (
     DEFAULT_PID,
     DEFAULT_PRESETS,
     DEFAULT_SETPOINT,
+    DEFAULT_SUPPLY_TARGET_TEMP,
     DEFAULT_TEMP_EMA_TIME_CONSTANT,
     DEFAULT_TIMING,
     DOMAIN,
@@ -30,6 +31,7 @@ from .const import (
     UI_SETPOINT_DEFAULT,
     UI_SETPOINT_MAX,
     UI_SETPOINT_MIN,
+    UI_SUPPLY_TARGET_TEMP,
     UI_TEMP_EMA_TIME_CONSTANT,
     UI_TIMING_CLOSING_WARNING,
     UI_TIMING_CONTROLLER_LOOP_INTERVAL,
@@ -47,6 +49,8 @@ CONF_CONTROLLER_ID = "controller_id"
 CONF_HEAT_REQUEST_ENTITY = "heat_request_entity"
 CONF_DHW_ACTIVE_ENTITY = "dhw_active_entity"
 CONF_SUMMER_MODE_ENTITY = "summer_mode_entity"
+CONF_SUPPLY_TEMP_ENTITY = "supply_temp_entity"
+CONF_SUPPLY_TARGET_TEMP = "supply_target_temp"
 
 
 def get_timing_schema(timing: TimingDefaults | None = None) -> vol.Schema:
@@ -607,7 +611,7 @@ class UFHControllerOptionsFlowHandler(config_entries.OptionsFlow):
         """Show menu with configuration options."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["control_entities", "timing"],
+            menu_options=["control_entities", "timing", "heat_accounting"],
         )
 
     async def async_step_control_entities(
@@ -706,6 +710,59 @@ class UFHControllerOptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="timing",
             data_schema=get_timing_schema(timing),
+        )
+
+    async def async_step_heat_accounting(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> config_entries.ConfigFlowResult:
+        """Configure heat accounting settings (supply temperature sensor and target)."""
+        if user_input is not None:
+            # Update the config entry data with supply temperature settings
+            new_data = {
+                **self.config_entry.data,
+                CONF_SUPPLY_TEMP_ENTITY: user_input.get(CONF_SUPPLY_TEMP_ENTITY),
+                CONF_SUPPLY_TARGET_TEMP: user_input.get(
+                    CONF_SUPPLY_TARGET_TEMP, DEFAULT_SUPPLY_TARGET_TEMP
+                ),
+            }
+            self.hass.config_entries.async_update_entry(
+                self.config_entry,
+                data=new_data,
+            )
+            return self.async_create_entry(title="", data={})
+
+        # Get current values from config entry data
+        current_data = self.config_entry.data
+
+        return self.async_show_form(
+            step_id="heat_accounting",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_SUPPLY_TEMP_ENTITY,
+                        description={
+                            "suggested_value": current_data.get(CONF_SUPPLY_TEMP_ENTITY)
+                        },
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(
+                        CONF_SUPPLY_TARGET_TEMP,
+                        default=current_data.get(
+                            CONF_SUPPLY_TARGET_TEMP, DEFAULT_SUPPLY_TARGET_TEMP
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=UI_SUPPLY_TARGET_TEMP["min"],
+                            max=UI_SUPPLY_TARGET_TEMP["max"],
+                            step=UI_SUPPLY_TARGET_TEMP["step"],
+                            unit_of_measurement=UnitOfTemperature.CELSIUS,
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                }
+            ),
         )
 
 

@@ -88,6 +88,15 @@ DUTY_CYCLE_SENSOR = UFHZoneSensorEntityDescription(
     value_fn=lambda data: data.get("duty_cycle"),
 )
 
+SUPPLY_COEFFICIENT_SENSOR = UFHZoneSensorEntityDescription(
+    key="supply_coefficient",
+    translation_key="supply_coefficient",
+    native_unit_of_measurement=PERCENTAGE,
+    state_class=SensorStateClass.MEASUREMENT,
+    suggested_display_precision=0,
+    value_fn=lambda data: data.get("supply_coefficient"),
+)
+
 
 async def async_setup_entry(
     _hass: HomeAssistant,
@@ -98,10 +107,17 @@ async def async_setup_entry(
     coordinator = entry.runtime_data.coordinator
     controller_subentry_id = get_controller_subentry_id(entry)
 
+    # Check if supply temp is configured (enables heat performance sensors)
+    supply_entity = entry.data.get("supply_temp_entity")
+
     # Add controller-level sensors
     if controller_subentry_id is not None:
+        controller_sensors: list[SensorEntity] = [
+            UFHRequestingZonesSensor(coordinator, controller_subentry_id)
+        ]
+
         async_add_entities(
-            [UFHRequestingZonesSensor(coordinator, controller_subentry_id)],
+            controller_sensors,
             config_subentry_id=controller_subentry_id,
         )
 
@@ -113,18 +129,18 @@ async def async_setup_entry(
         zone_name = subentry.data["name"]
         subentry_id = subentry.subentry_id
 
-        async_add_entities(
+        zone_sensors: list[SensorEntity] = [
+            UFHZoneSensor(
+                coordinator=coordinator,
+                zone_id=zone_id,
+                zone_name=zone_name,
+                description=description,
+                subentry_id=subentry_id,
+            )
+            for description in ZONE_SENSORS
+        ]
+        zone_sensors.extend(
             [
-                UFHZoneSensor(
-                    coordinator=coordinator,
-                    zone_id=zone_id,
-                    zone_name=zone_name,
-                    description=description,
-                    subentry_id=subentry_id,
-                )
-                for description in ZONE_SENSORS
-            ]
-            + [
                 UFHPidErrorSensor(
                     coordinator=coordinator,
                     zone_id=zone_id,
@@ -135,9 +151,26 @@ async def async_setup_entry(
                     coordinator=coordinator,
                     zone_id=zone_id,
                     zone_name=zone_name,
+                    description=DUTY_CYCLE_SENSOR,
                     subentry_id=subentry_id,
                 ),
-            ],
+            ]
+        )
+
+        # Add supply_coefficient sensor only if supply_temp_entity is configured
+        if supply_entity:
+            zone_sensors.append(
+                UFHDutyCycleSensor(
+                    coordinator=coordinator,
+                    zone_id=zone_id,
+                    zone_name=zone_name,
+                    description=SUPPLY_COEFFICIENT_SENSOR,
+                    subentry_id=subentry_id,
+                )
+            )
+
+        async_add_entities(
+            zone_sensors,
             config_subentry_id=subentry_id,
         )
 
@@ -214,18 +247,6 @@ class UFHPidErrorSensor(UFHZoneSensor):
 
 class UFHDutyCycleSensor(UFHZoneSensor):
     """Sensor entity for duty cycle with dynamic icon based on value."""
-
-    def __init__(
-        self,
-        coordinator: UFHControllerDataUpdateCoordinator,
-        zone_id: str,
-        zone_name: str,
-        subentry_id: str,
-    ) -> None:
-        """Initialize the duty cycle sensor entity."""
-        super().__init__(
-            coordinator, zone_id, zone_name, DUTY_CYCLE_SENSOR, subentry_id
-        )
 
     @property
     def icon(self) -> str | None:

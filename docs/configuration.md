@@ -443,3 +443,32 @@ A select entity on the boiler to toggle between "summer" (heating circuit disabl
 **Why it matters:** Reduces standby energy consumption by disabling the heating circuit when not needed. Alternative to using `heat_request_entity`.
 
 ---
+
+### Heat Accounting
+
+Supply temperature monitoring enables normalized quota tracking, where zones consume their time budget based on actual supply conditions rather than just elapsed time.
+
+#### supply_temp_entity
+
+**Type:** Sensor entity
+**Required:** No
+**Config location:** ConfigEntry → `data.supply_temp_entity`
+
+A temperature sensor measuring the supply water temperature at the heating manifold.
+
+**How it works:** The controller uses this sensor to calculate a supply coefficient for each zone, which scales quota consumption. When supply temperature is below target, zones consume quota slower, allowing them to stay open longer to compensate for the reduced heating effectiveness.
+
+**Example:** `sensor.manifold_supply_temperature`
+
+#### supply_target_temp
+
+**Type:** Number
+**Default:** 40.0°C
+**Range:** 25.0-60.0°C
+**Config location:** ConfigEntry → `data.supply_target_temp`
+
+The expected supply temperature when the boiler is operating normally.
+
+**How it works:** See [Heat Accounting](heat_accounting.md) for detailed documentation.
+
+---

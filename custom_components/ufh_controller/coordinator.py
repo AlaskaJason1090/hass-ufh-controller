@@ -22,6 +22,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from .const import (
     DEFAULT_PID,
     DEFAULT_SETPOINT,
+    DEFAULT_SUPPLY_TARGET_TEMP,
     DEFAULT_TEMP_EMA_TIME_CONSTANT,
     DEFAULT_TIMING,
     DOMAIN,
@@ -183,6 +184,10 @@ class UFHControllerDataUpdateCoordinator(
             heat_request_entity=data.get("heat_request_entity"),
             dhw_active_entity=data.get("dhw_active_entity"),
             summer_mode_entity=data.get("summer_mode_entity"),
+            supply_temp_entity=data.get("supply_temp_entity"),
+            supply_target_temp=data.get(
+                "supply_target_temp", DEFAULT_SUPPLY_TARGET_TEMP
+            ),
             timing=timing,
             zones=zones,
         )
@@ -213,6 +218,16 @@ class UFHControllerDataUpdateCoordinator(
             except (ValueError, TypeError):
                 # Invalid timestamp format, start fresh
                 self.last_update_success_time = None
+
+        # Restore last force update for observation period tracking
+        if "last_force_update" in stored_data:
+            try:
+                self._last_force_update = datetime.fromisoformat(
+                    stored_data["last_force_update"]
+                )
+            except (ValueError, TypeError):
+                # Invalid timestamp format, will trigger reset on first update
+                self._last_force_update = None
 
         # Restore controller-level state using shared method
         self._restore_controller_state(stored_data)
@@ -347,6 +362,10 @@ class UFHControllerDataUpdateCoordinator(
         if "display_temp" in zone_state:
             runtime.state.display_temp = zone_state["display_temp"]
 
+        # Restore used_duration
+        if "used_duration" in zone_state:
+            runtime.state.used_duration = zone_state["used_duration"]
+
     def _build_storage_state(self) -> dict[str, Any]:
         """Build state dictionary for persistent storage."""
         zones_data: dict[str, dict[str, Any]] = {}
@@ -374,6 +393,8 @@ class UFHControllerDataUpdateCoordinator(
                 # Save display temperature for immediate availability on restore
                 if runtime.state.display_temp is not None:
                     zone_data["display_temp"] = runtime.state.display_temp
+                # Save used_duration for continuity within observation period
+                zone_data["used_duration"] = runtime.state.used_duration
                 zones_data[zone_id] = zone_data
 
         data = {
@@ -387,6 +408,10 @@ class UFHControllerDataUpdateCoordinator(
         # Include last update timestamp from base class
         if self.last_update_success_time is not None:
             data["last_update_success_time"] = self.last_update_success_time.isoformat()
+
+        # Include last force update timestamp for observation period tracking
+        if self._last_force_update is not None:
+            data["last_force_update"] = self._last_force_update.isoformat()
 
         return data
 
@@ -474,19 +499,8 @@ class UFHControllerDataUpdateCoordinator(
         if not self._controller.zone_ids:
             return self._build_state_dict()
 
-        # Update observation start and elapsed time
-        self._controller.state.observation_start = get_observation_start(
-            now, timing.observation_period
-        )
-        self._controller.state.period_elapsed = (
-            now - self._controller.state.observation_start
-        ).total_seconds()
-
-        # Determine if force-update is needed (once per observation cycle)
-        force_update = (
-            self._last_force_update is None
-            or self._last_force_update < self._controller.state.observation_start
-        )
+        # Handle observation period transition
+        force_update = self._handle_observation_period_transition(now)
 
         # Check DHW active state
         await self._update_dhw_state()
@@ -544,10 +558,6 @@ class UFHControllerDataUpdateCoordinator(
             summer_mode = SummerMode.WINTER if heat_request else SummerMode.SUMMER
             await self._set_summer_mode(summer_mode, force_update=force_update)
 
-        # Mark force-update as completed for this cycle
-        if force_update:
-            self._last_force_update = now
-
         return self._build_state_dict()
 
     async def _update_dhw_state(self) -> None:
@@ -579,6 +589,57 @@ class UFHControllerDataUpdateCoordinator(
         # Update current state
         self._prev_dhw_active = current_dhw_active
         self._controller.state.dhw_active = current_dhw_active
+
+    def _handle_observation_period_transition(self, now: datetime) -> bool:
+        """
+        Handle observation period transition and return whether force update is needed.
+
+        This method:
+        1. Updates observation_start and period_elapsed
+        2. Detects if we've transitioned to a new observation period
+        3. Resets used_duration for all zones on period transition
+        4. Updates _last_force_update timestamp
+
+        Returns True if force update is needed (new period started).
+        """
+        timing = self._controller.config.timing
+
+        # Update observation start and elapsed time
+        self._controller.state.observation_start = get_observation_start(
+            now, timing.observation_period
+        )
+        self._controller.state.period_elapsed = (
+            now - self._controller.state.observation_start
+        ).total_seconds()
+
+        # Check if we've transitioned to a new observation period
+        new_period = (
+            self._last_force_update is None
+            or self._last_force_update < self._controller.state.observation_start
+        )
+
+        if new_period:
+            # Reset used_duration for all zones at period boundary
+            for runtime in self._controller.zone_runtimes:
+                runtime.reset_used_duration()
+
+            # Mark this period as handled
+            self._last_force_update = now
+
+        return new_period
+
+    def _get_supply_temp(self) -> float | None:
+        """Get current supply temperature if available."""
+        supply_entity = self._controller.config.supply_temp_entity
+        if supply_entity is None:
+            return None
+        supply_state = self.hass.states.get(supply_entity)
+        if supply_state is None:
+            return None
+        try:
+            return float(supply_state.state)
+        except (ValueError, TypeError):
+            return None
 
     def _is_any_window_open(self, window_sensors: list[str]) -> bool:
         """Check if any window sensor is currently in 'on' state."""
@@ -629,35 +690,9 @@ class UFHControllerDataUpdateCoordinator(
         # Update PID controller
         runtime.update_pid(dt, self._controller.mode)
 
-        # Query historical data from Recorder
+        # Update requested_duration from current duty cycle
         timing = self._controller.config.timing
-
-        # CRITICAL: Valve state since observation start (for used_duration/quota)
-        # If this fails, zone enters degraded state
-        period_start = self._controller.state.observation_start
-        recorder_failure = False
-        try:
-            period_state_avg = await get_state_average(
-                self.hass,
-                runtime.config.valve_switch,
-                period_start,
-                now,
-                on_value="on",
-            )
-        except SQLAlchemyError:
-            recorder_failure = True
-            LOGGER.warning(
-                "Zone %s: Failed to query period state, zone entering degraded mode",
-                zone_id,
-                exc_info=True,
-            )
-            # Use fallback: assume current valve state has been stable
-            current_valve_state = self.hass.states.get(runtime.config.valve_switch)
-            period_state_avg = (
-                1.0
-                if ValveState.from_ha_state(current_valve_state) == ValveState.ON
-                else 0.0
-            )
+        runtime.update_requested_duration(timing.observation_period)
 
         # NON-CRITICAL: Valve state for open detection (recent window)
         # Fallback: Use current valve entity state
@@ -711,12 +746,19 @@ class UFHControllerDataUpdateCoordinator(
 
         # Update zone with historical data
         runtime.update_historical(
-            period_state_avg=period_state_avg,
             open_state_avg=open_state_avg,
             window_recently_open=window_recently_open,
-            elapsed_time=self._controller.state.period_elapsed,
-            observation_period=timing.observation_period,
         )
+
+        # Update supply coefficient from supply temperature
+        supply_temp = self._get_supply_temp()
+        runtime.update_supply_coefficient(
+            supply_temp=supply_temp,
+            supply_target_temp=self._controller.config.supply_target_temp,
+        )
+
+        # Update used_duration based on flow and heat performance
+        runtime.update_used_duration(dt)
 
         # Sync valve state from actual HA entity
         # This ensures we detect when external factors change the valve state
@@ -749,14 +791,12 @@ class UFHControllerDataUpdateCoordinator(
         result = runtime.update_failure_state(
             now,
             temp_unavailable=temp_unavailable,
-            recorder_failure=recorder_failure,
             valve_unavailable=valve_unavailable,
         )
         self._log_zone_status_transition(
             zone_id,
             result,
             temp_unavailable=temp_unavailable,
-            recorder_failure=recorder_failure,
             valve_unavailable=valve_unavailable,
         )
 
@@ -766,7 +806,6 @@ class UFHControllerDataUpdateCoordinator(
         result: FailureStateResult,
         *,
         temp_unavailable: bool,
-        recorder_failure: bool,
         valve_unavailable: bool,
     ) -> None:
         """Log zone status transitions (integration layer's responsibility)."""
@@ -779,10 +818,9 @@ class UFHControllerDataUpdateCoordinator(
         elif result.transition == ZoneStatusTransition.ENTERED_DEGRADED:
             LOGGER.warning(
                 "Zone %s entering degraded mode: temp_unavailable=%s, "
-                "recorder_failure=%s, valve_unavailable=%s",
+                "valve_unavailable=%s",
                 zone_id,
                 temp_unavailable,
-                recorder_failure,
                 valve_unavailable,
             )
         elif result.transition == ZoneStatusTransition.RECOVERED:
@@ -1050,8 +1088,10 @@ class UFHControllerDataUpdateCoordinator(
                     "heat_request": self._controller.state.heat_requests.get(
                         zone_id, False
                     ),
+                    "flow": state.flow,
                     "preset_mode": state.preset_mode,
                     "zone_status": state.zone_status.value,
+                    "supply_coefficient": state.supply_coefficient,
                 }
 
         return result

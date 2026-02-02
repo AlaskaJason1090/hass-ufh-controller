@@ -15,6 +15,9 @@
       },
       "requesting_zones": {
         "default": "mdi:counter"
+      },
+      "supply_coefficient": {
+        "default": "mdi:gauge"
       }
     },
     "binary_sensor": {

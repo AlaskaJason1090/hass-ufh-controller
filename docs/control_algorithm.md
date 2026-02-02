@@ -49,6 +49,17 @@ This prevents the common problem of integral windup where the integral term accu
 | **Observation Period** | 2 hours (default) | Aligned to midnight (00:00, 02:00, 04:00...) |
 | **Valve Open Detection** | 3.5 minutes | Fixed window for detecting valve fully open  |
 
+### Heat Accounting
+
+Heat accounting tracks how much of its quota each zone has consumed during the observation period, with optional supply-temperature normalization to adjust for actual heating conditions.
+
+**Key concepts:**
+- `used_duration` accumulates only when `flow=True` (valve confirmed open)
+- When a supply temperature sensor is configured, accumulation is weighted by the supply coefficient
+- At period boundaries, all zones reset to fresh quota
+
+See [Heat Accounting](heat_accounting.md) for detailed documentation.
+
 ### Zone Decision Tree
 
 The zone evaluation follows a priority-based decision tree:
@@ -73,7 +84,7 @@ The zone evaluation follows a priority-based decision tree:
 
 A zone contributes to the heat request when all conditions are met:
 - Valve is currently on
-- Valve has been on for at least 85% of the valve open detection window (confirming the valve is fully open)
+- Flow is active (confirming the valve is fully open)
 - Remaining quota is at least the closing warning duration (zone won't close imminently)
 
 The controller aggregates heat requests from all zones: if any zone requests heat, the boiler heat request is enabled.

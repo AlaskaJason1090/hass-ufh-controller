@@ -277,3 +277,57 @@ async def test_duty_cycle_sensor_icon(
     state = hass.states.get(f"{sensor_entity_prefix}_duty_cycle")
     assert state is not None
     assert state.attributes.get("icon") == expected_icon
+
+
+async def test_supply_coefficient_sensor_created_with_supply_entity(
+    hass: HomeAssistant,
+    mock_config_entry_with_supply_temp: MockConfigEntry,
+) -> None:
+    """Test supply_coefficient sensor is created when supply_temp_entity is set."""
+    # Set up the supply temperature sensor entity
+    hass.states.async_set("sensor.supply_temp", "45.0")
+    hass.states.async_set("sensor.zone1_temp", "20.5")
+    hass.states.async_set("switch.zone1_valve", "off")
+
+    mock_config_entry_with_supply_temp.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry_with_supply_temp.entry_id)
+    await hass.async_block_till_done()
+
+    # Supply coefficient sensor should exist for zone1
+    state = hass.states.get("sensor.test_zone_1_supply_coefficient")
+    assert state is not None
+
+
+async def test_supply_coefficient_sensor_not_created_without_supply_entity(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Test supply_coefficient sensor is NOT created when no supply_temp_entity."""
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Supply coefficient sensor should NOT exist
+    state = hass.states.get("sensor.test_zone_1_supply_coefficient")
+    assert state is None
+
+
+async def test_supply_temp_invalid_state_returns_none(
+    hass: HomeAssistant,
+    mock_config_entry_with_supply_temp: MockConfigEntry,
+) -> None:
+    """Test that invalid supply temp state (non-numeric) is handled gracefully."""
+    # Set up the supply temperature sensor with an invalid state
+    hass.states.async_set("sensor.supply_temp", STATE_UNAVAILABLE)
+    hass.states.async_set("sensor.zone1_temp", "20.5")
+    hass.states.async_set("switch.zone1_valve", "off")
+
+    mock_config_entry_with_supply_temp.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry_with_supply_temp.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = mock_config_entry_with_supply_temp.runtime_data.coordinator
+
+    # _get_supply_temp should return None when state is non-numeric
+    result = coordinator._get_supply_temp()
+    assert result is None

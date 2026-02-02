@@ -3,14 +3,18 @@
 import pytest
 
 from custom_components.ufh_controller.const import (
+    DEFAULT_PID,
     OperationMode,
     TimingParams,
     ValveState,
 )
 from custom_components.ufh_controller.core.controller import ControllerState
+from custom_components.ufh_controller.core.pid import PIDController
 from custom_components.ufh_controller.core.zone import (
     CircuitType,
     ZoneAction,
+    ZoneConfig,
+    ZoneRuntime,
     ZoneState,
     calculate_requested_duration,
     evaluate_zone,
@@ -217,3 +221,252 @@ class TestTimingParams:
         """Test flush_duration has correct default value."""
         timing = TimingParams()
         assert timing.flush_duration == 480  # 8 minutes
+
+
+class TestZoneRuntimeSupplyCoefficient:
+    """Test update_supply_coefficient method."""
+
+    @pytest.fixture
+    def zone_runtime(self) -> ZoneRuntime:
+        """Create a zone runtime for testing with setpoint=20°C."""
+        config = ZoneConfig(
+            zone_id="test",
+            name="Test Zone",
+            temp_sensor="sensor.test",
+            valve_switch="switch.test",
+            kp=DEFAULT_PID["kp"],
+            ki=DEFAULT_PID["ki"],
+            kd=DEFAULT_PID["kd"],
+        )
+        pid = PIDController(
+            kp=config.kp,
+            ki=config.ki,
+            kd=config.kd,
+        )
+        state = ZoneState(zone_id="test")
+        state.setpoint = 20.0  # Explicit setpoint for formula clarity
+        return ZoneRuntime(config=config, pid=pid, state=state)
+
+    @pytest.mark.parametrize(
+        ("supply_temp", "room_temp", "setpoint", "supply_target", "expected"),
+        [
+            # Design conditions: (40-20)/(40-20) = 100%
+            (40.0, 20.0, 20.0, 40.0, 100.0),
+            # Cold room: (40-15)/(40-20) = 125%
+            (40.0, 15.0, 20.0, 40.0, 125.0),
+            # Very cold room: (40-10)/(40-20) = 150%
+            (40.0, 10.0, 20.0, 40.0, 150.0),
+            # Room overshooting: (40-22)/(40-20) = 90%
+            (40.0, 22.0, 20.0, 40.0, 90.0),
+            # Room way above setpoint: (40-25)/(40-20) = 75%
+            (40.0, 25.0, 20.0, 40.0, 75.0),
+            # Boiler warming up: (30-20)/(40-20) = 50%
+            (30.0, 20.0, 20.0, 40.0, 50.0),
+            # Hot supply: (45-20)/(40-20) = 125%
+            (45.0, 20.0, 20.0, 40.0, 125.0),
+            # Different setpoint (22°C): (40-20)/(40-22) ≈ 111.1%
+            (40.0, 20.0, 22.0, 40.0, pytest.approx(111.1, rel=0.01)),
+        ],
+    )
+    def test_supply_coefficient_calculation(
+        self,
+        zone_runtime: ZoneRuntime,
+        supply_temp: float,
+        room_temp: float,
+        setpoint: float,
+        supply_target: float,
+        expected: float,
+    ) -> None:
+        """Test supply coefficient formula with various scenarios."""
+        zone_runtime.state.current = room_temp
+        zone_runtime.state.setpoint = setpoint
+        zone_runtime.update_supply_coefficient(
+            supply_temp=supply_temp, supply_target_temp=supply_target
+        )
+        assert zone_runtime.state.supply_coefficient == expected
+
+    def test_supply_at_room_temp_returns_zero(self, zone_runtime: ZoneRuntime) -> None:
+        """Supply at room temp gives 0% coefficient."""
+        zone_runtime.state.current = 20.0
+        zone_runtime.update_supply_coefficient(
+            supply_temp=20.0, supply_target_temp=40.0
+        )
+        assert zone_runtime.state.supply_coefficient == 0.0
+
+    def test_supply_below_room_temp_returns_zero(
+        self, zone_runtime: ZoneRuntime
+    ) -> None:
+        """Supply below room temp gives 0% coefficient."""
+        zone_runtime.state.current = 20.0
+        zone_runtime.update_supply_coefficient(
+            supply_temp=15.0, supply_target_temp=40.0
+        )
+        assert zone_runtime.state.supply_coefficient == 0.0
+
+    def test_setpoint_at_supply_target_returns_none(
+        self, zone_runtime: ZoneRuntime
+    ) -> None:
+        """Setpoint at/above supply target returns None (invalid config)."""
+        zone_runtime.state.current = 20.0
+        zone_runtime.state.setpoint = 40.0  # Setpoint equals supply target
+        zone_runtime.update_supply_coefficient(
+            supply_temp=40.0, supply_target_temp=40.0
+        )
+        assert zone_runtime.state.supply_coefficient is None
+
+    def test_setpoint_above_supply_target_returns_none(
+        self, zone_runtime: ZoneRuntime
+    ) -> None:
+        """Setpoint above supply target returns None (invalid config)."""
+        zone_runtime.state.current = 20.0
+        zone_runtime.state.setpoint = 45.0  # Setpoint above supply target
+        zone_runtime.update_supply_coefficient(
+            supply_temp=40.0, supply_target_temp=40.0
+        )
+        assert zone_runtime.state.supply_coefficient is None
+
+    def test_supply_temp_unavailable_returns_none(
+        self, zone_runtime: ZoneRuntime
+    ) -> None:
+        """No supply temp returns None."""
+        zone_runtime.state.current = 20.0
+        zone_runtime.update_supply_coefficient(
+            supply_temp=None, supply_target_temp=40.0
+        )
+        assert zone_runtime.state.supply_coefficient is None
+
+    def test_room_temp_unavailable_returns_none(
+        self, zone_runtime: ZoneRuntime
+    ) -> None:
+        """No room temp returns None."""
+        zone_runtime.state.current = None
+        zone_runtime.update_supply_coefficient(
+            supply_temp=40.0, supply_target_temp=40.0
+        )
+        assert zone_runtime.state.supply_coefficient is None
+
+    def test_caps_at_200_percent(self, zone_runtime: ZoneRuntime) -> None:
+        """Supply coefficient caps at 200% to prevent runaway accumulation."""
+        zone_runtime.state.current = 20.0
+        # (80-20)/(40-20)*100 = 300%, but should cap at 200%
+        zone_runtime.update_supply_coefficient(
+            supply_temp=80.0, supply_target_temp=40.0
+        )
+        assert zone_runtime.state.supply_coefficient == 200.0
+
+
+class TestZoneRuntimeUsedDuration:
+    """Test update_used_duration method."""
+
+    @pytest.fixture
+    def zone_runtime(self) -> ZoneRuntime:
+        """Create a zone runtime for testing."""
+        config = ZoneConfig(
+            zone_id="test",
+            name="Test Zone",
+            temp_sensor="sensor.test",
+            valve_switch="switch.test",
+        )
+        pid = PIDController(kp=50.0, ki=0.0, kd=0.0)
+        state = ZoneState(zone_id="test")
+        return ZoneRuntime(config=config, pid=pid, state=state)
+
+    def test_flow_true_no_coefficient_increments_by_dt(
+        self, zone_runtime: ZoneRuntime
+    ) -> None:
+        """Flow=True without supply_coefficient increments by dt (fallback)."""
+        zone_runtime.state.flow = True
+        zone_runtime.state.supply_coefficient = None
+        zone_runtime.state.used_duration = 100.0
+
+        zone_runtime.update_used_duration(60.0)
+
+        assert zone_runtime.state.used_duration == 160.0
+
+    def test_flow_false_does_not_accumulate(self, zone_runtime: ZoneRuntime) -> None:
+        """Flow=False means no accumulation."""
+        zone_runtime.state.flow = False
+        zone_runtime.state.supply_coefficient = 100.0
+        zone_runtime.state.used_duration = 100.0
+
+        zone_runtime.update_used_duration(60.0)
+
+        assert zone_runtime.state.used_duration == 100.0  # Unchanged
+
+    def test_flow_true_with_100_percent_coefficient(
+        self, zone_runtime: ZoneRuntime
+    ) -> None:
+        """Flow=True with 100% coefficient increments by dt."""
+        zone_runtime.state.flow = True
+        zone_runtime.state.supply_coefficient = 100.0
+        zone_runtime.state.used_duration = 100.0
+
+        zone_runtime.update_used_duration(60.0)
+
+        assert zone_runtime.state.used_duration == 160.0
+
+    def test_flow_true_with_120_percent_coefficient(
+        self, zone_runtime: ZoneRuntime
+    ) -> None:
+        """Flow=True with 120% coefficient increments by 1.2 * dt."""
+        zone_runtime.state.flow = True
+        zone_runtime.state.supply_coefficient = 120.0
+        zone_runtime.state.used_duration = 100.0
+
+        zone_runtime.update_used_duration(60.0)
+
+        # 100 + 60 * 1.2 = 172
+        assert zone_runtime.state.used_duration == 172.0
+
+    def test_flow_true_with_50_percent_coefficient(
+        self, zone_runtime: ZoneRuntime
+    ) -> None:
+        """Flow=True with 50% coefficient increments by 0.5 * dt."""
+        zone_runtime.state.flow = True
+        zone_runtime.state.supply_coefficient = 50.0
+        zone_runtime.state.used_duration = 100.0
+
+        zone_runtime.update_used_duration(60.0)
+
+        # 100 + 60 * 0.5 = 130
+        assert zone_runtime.state.used_duration == 130.0
+
+    def test_reset_used_duration(self, zone_runtime: ZoneRuntime) -> None:
+        """Reset clears used_duration to zero."""
+        zone_runtime.state.used_duration = 5000.0
+        zone_runtime.reset_used_duration()
+        assert zone_runtime.state.used_duration == 0.0
+
+
+class TestZoneRuntimeRequestedDuration:
+    """Test update_requested_duration method."""
+
+    @pytest.fixture
+    def zone_runtime(self) -> ZoneRuntime:
+        """Create a zone runtime for testing."""
+        config = ZoneConfig(
+            zone_id="test",
+            name="Test Zone",
+            temp_sensor="sensor.test",
+            valve_switch="switch.test",
+        )
+        pid = PIDController(kp=50.0, ki=0.0, kd=0.0)
+        state = ZoneState(zone_id="test")
+        return ZoneRuntime(config=config, pid=pid, state=state)
+
+    def test_updates_from_duty_cycle(self, zone_runtime: ZoneRuntime) -> None:
+        """Requested duration calculated from current duty cycle."""
+        # Set up a duty cycle via PID update
+        zone_runtime.state.current = 19.0  # 2 degrees below setpoint
+        zone_runtime.update_pid(60.0, OperationMode.HEAT)
+
+        zone_runtime.update_requested_duration(7200)
+
+        # With 2 degree error and Kp=50, duty_cycle = 100% (clamped)
+        assert zone_runtime.state.requested_duration == 7200.0
+
+    def test_no_pid_state_returns_zero(self, zone_runtime: ZoneRuntime) -> None:
+        """No PID state means zero requested duration."""
+        # Don't call update_pid - state is None
+        zone_runtime.update_requested_duration(7200)
+        assert zone_runtime.state.requested_duration == 0.0

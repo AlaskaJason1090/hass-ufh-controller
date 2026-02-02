@@ -54,6 +54,8 @@ class ControllerConfig:
     heat_request_entity: str | None = None
     dhw_active_entity: str | None = None
     summer_mode_entity: str | None = None
+    supply_temp_entity: str | None = None
+    supply_target_temp: float = 40.0
     timing: TimingParams = field(default_factory=TimingParams)
     zones: list[ZoneConfig] = field(default_factory=list)
 
@@ -437,3 +439,8 @@ class HeatingController:
     def zone_ids(self) -> list[str]:
         """Get list of all zone IDs."""
         return list(self._zones.keys())
+
+    @property
+    def zone_runtimes(self) -> list[ZoneRuntime]:
+        """Get list of all zone runtimes."""
+        return list(self._zones.values())

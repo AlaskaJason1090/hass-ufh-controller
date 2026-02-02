@@ -66,13 +66,11 @@ def setup_zone_historical(
     controller: "HeatingController",
     zone_id: str,
     *,
-    period_state_avg: float,
     open_state_avg: float,
     window_recently_open: bool,
-    elapsed_time: float,
 ) -> None:
     """
-    Set up zone historical data for quota-based scheduling.
+    Set up zone historical data for flow detection and window blocking.
 
     This helper replaces the removed update_zone_historical() delegator method.
     Use this in tests to set up zone historical state before evaluating.
@@ -80,21 +78,16 @@ def setup_zone_historical(
     Args:
         controller: HeatingController instance.
         zone_id: Zone identifier.
-        period_state_avg: Average valve state since observation start (0.0-1.0).
         open_state_avg: Average valve state for open detection (0.0-1.0).
         window_recently_open: Whether any window was open recently.
-        elapsed_time: Elapsed time since observation start in seconds.
 
     """
     runtime = controller.get_zone_runtime(zone_id)
     if runtime is None:
         return
     runtime.update_historical(
-        period_state_avg=period_state_avg,
         open_state_avg=open_state_avg,
         window_recently_open=window_recently_open,
-        elapsed_time=elapsed_time,
-        observation_period=controller.config.timing.observation_period,
     )
 
 
@@ -270,6 +263,34 @@ def mock_config_entry_all_entities() -> MockConfigEntry:
         },
         entry_id="test_entry_id_full",
         unique_id=f"{MOCK_CONTROLLER_ID}_full",
+        subentries_data=[
+            {
+                "data": MOCK_ZONE_DATA,
+                "subentry_id": "subentry_zone1",
+                "subentry_type": SUBENTRY_TYPE_ZONE,
+                "title": "Test Zone 1",
+                "unique_id": "zone1",
+            }
+        ],
+    )
+
+
+@pytest.fixture
+def mock_config_entry_with_supply_temp() -> MockConfigEntry:
+    """Return a mock config entry with supply temperature entity configured."""
+    return MockConfigEntry(
+        domain=DOMAIN,
+        title="Test Controller Flow",
+        data={
+            "name": "Test Controller Flow",
+            "controller_id": f"{MOCK_CONTROLLER_ID}_flow",
+            "supply_temp_entity": "sensor.supply_temp",
+        },
+        options={
+            "timing": DEFAULT_TIMING,
+        },
+        entry_id="test_entry_id_flow",
+        unique_id=f"{MOCK_CONTROLLER_ID}_flow",
         subentries_data=[
             {
                 "data": MOCK_ZONE_DATA,
