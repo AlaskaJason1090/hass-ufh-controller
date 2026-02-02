@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from custom_components.ufh_controller.const import TimingParams, ValveState
+from custom_components.ufh_controller.const import TimingConfig, ValveState
 from custom_components.ufh_controller.core.controller import ControllerState
 from custom_components.ufh_controller.core.zone import (
     CircuitType,
@@ -18,11 +18,11 @@ class TestEvaluateZoneFlushCircuitPostDHW:
     """Test flush circuit behavior during post-DHW flush period."""
 
     @pytest.fixture
-    def timing(self) -> TimingParams:
-        """Create default timing params."""
-        return TimingParams()
+    def timing(self) -> TimingConfig:
+        """Create default timing config."""
+        return TimingConfig()
 
-    def test_flush_during_post_dhw_turns_on(self, timing: TimingParams) -> None:
+    def test_flush_during_post_dhw_turns_on(self, timing: TimingConfig) -> None:
         """Flush circuit turns on during post-DHW flush period."""
         zone = ZoneState(
             zone_id="bathroom",
@@ -36,7 +36,7 @@ class TestEvaluateZoneFlushCircuitPostDHW:
         result = evaluate_zone(zone, controller, timing, flush_request=True)
         assert result == ZoneAction.TURN_ON
 
-    def test_flush_during_post_dhw_stays_on(self, timing: TimingParams) -> None:
+    def test_flush_during_post_dhw_stays_on(self, timing: TimingConfig) -> None:
         """Flush circuit stays on during post-DHW flush period."""
         zone = ZoneState(
             zone_id="bathroom",
@@ -50,7 +50,7 @@ class TestEvaluateZoneFlushCircuitPostDHW:
         result = evaluate_zone(zone, controller, timing, flush_request=True)
         assert result == ZoneAction.STAY_ON
 
-    def test_flush_after_post_dhw_period_expired(self, timing: TimingParams) -> None:
+    def test_flush_after_post_dhw_period_expired(self, timing: TimingConfig) -> None:
         """Flush circuit follows normal logic after post-DHW period expires."""
         zone = ZoneState(
             zone_id="bathroom",
@@ -68,7 +68,7 @@ class TestEvaluateZoneFlushCircuitPostDHW:
         assert result == ZoneAction.STAY_OFF
 
     def test_flush_during_post_dhw_blocked_by_regular_valve_on(
-        self, timing: TimingParams
+        self, timing: TimingConfig
     ) -> None:
         """Flush circuit blocked during post-DHW when regular valve is ON."""
         flush_zone = ZoneState(
@@ -93,7 +93,7 @@ class TestEvaluateZoneFlushCircuitPostDHW:
         assert result == ZoneAction.STAY_OFF
 
     def test_flush_during_post_dhw_not_blocked_by_regular_demand_only(
-        self, timing: TimingParams
+        self, timing: TimingConfig
     ) -> None:
         """Flush circuit NOT blocked during post-DHW when regular valve is OFF."""
         flush_zone = ZoneState(
@@ -120,12 +120,12 @@ class TestFlushCircuitScenarios:
     """Scenario tests for flush circuit behavior in real-world situations."""
 
     @pytest.fixture
-    def timing(self) -> TimingParams:
-        """Create default timing params."""
-        return TimingParams()
+    def timing(self) -> TimingConfig:
+        """Create default timing config."""
+        return TimingConfig()
 
     def test_flush_yields_to_regular_heating_during_post_dhw(
-        self, timing: TimingParams
+        self, timing: TimingConfig
     ) -> None:
         """
         Scenario: Flush circuit yields when regular circuit starts heating.

@@ -5,7 +5,7 @@ import pytest
 from custom_components.ufh_controller.const import (
     DEFAULT_PID,
     OperationMode,
-    TimingParams,
+    TimingConfig,
     ValveState,
 )
 from custom_components.ufh_controller.core.controller import ControllerState
@@ -60,12 +60,12 @@ class TestPeriodTransitionScenario:
     """
 
     @pytest.fixture
-    def timing(self) -> TimingParams:
-        """Create timing params with 7200s period and 540s min run time."""
-        return TimingParams(observation_period=7200, min_run_time=540)
+    def timing(self) -> TimingConfig:
+        """Create timing config with 7200s period and 540s min run time."""
+        return TimingConfig(observation_period=7200, min_run_time=540)
 
     def test_high_quota_usage_near_period_end_freezes(
-        self, timing: TimingParams
+        self, timing: TimingConfig
     ) -> None:
         """
         Zone at 90% quota near period end should freeze (valve off stays off).
@@ -86,7 +86,7 @@ class TestPeriodTransitionScenario:
         assert result == ZoneAction.STAY_OFF
 
     def test_high_quota_usage_near_period_end_valve_on_stays_on(
-        self, timing: TimingParams
+        self, timing: TimingConfig
     ) -> None:
         """Zone running near period end should stay on (freeze prevents cycling)."""
         zone = ZoneState(
@@ -101,7 +101,7 @@ class TestPeriodTransitionScenario:
         # Freeze active: valve on stays on
         assert result == ZoneAction.STAY_ON
 
-    def test_fresh_period_allows_turn_on(self, timing: TimingParams) -> None:
+    def test_fresh_period_allows_turn_on(self, timing: TimingConfig) -> None:
         """
         After period reset, zone with demand gets fresh quota and can turn on.
 
@@ -121,7 +121,7 @@ class TestPeriodTransitionScenario:
         assert result == ZoneAction.TURN_ON
 
     def test_multiple_zones_can_turn_on_at_period_start(
-        self, timing: TimingParams
+        self, timing: TimingConfig
     ) -> None:
         """
         Multiple zones with demand can all turn on at start of new period.
@@ -196,12 +196,12 @@ class TestControllerState:
         assert len(controller.zones) == 2
 
 
-class TestTimingParams:
-    """Test TimingParams dataclass."""
+class TestTimingConfig:
+    """Test TimingConfig dataclass."""
 
     def test_default_values(self) -> None:
         """Test default values match specification."""
-        timing = TimingParams()
+        timing = TimingConfig()
         assert timing.observation_period == 7200
         assert timing.min_run_time == 540
         assert timing.valve_open_time == 210
@@ -210,7 +210,7 @@ class TestTimingParams:
 
     def test_custom_values(self) -> None:
         """Test custom timing values."""
-        timing = TimingParams(
+        timing = TimingConfig(
             observation_period=3600,
             min_run_time=300,
         )
@@ -219,7 +219,7 @@ class TestTimingParams:
 
     def test_flush_duration_default(self) -> None:
         """Test flush_duration has correct default value."""
-        timing = TimingParams()
+        timing = TimingConfig()
         assert timing.flush_duration == 480  # 8 minutes
 
 

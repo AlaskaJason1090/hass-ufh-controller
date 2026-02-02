@@ -159,7 +159,7 @@ DEFAULT_TIMING: TimingDefaults = {
 
 
 @dataclass
-class TimingParams:
+class TimingConfig:
     """
     Timing parameters for zone scheduling.
 

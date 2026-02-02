@@ -20,7 +20,7 @@ from custom_components.ufh_controller.const import (
     FAIL_SAFE_TIMEOUT,
     INITIALIZING_TIMEOUT,
     OperationMode,
-    TimingParams,
+    TimingConfig,
     ValveState,
     ZoneStatus,
 )
@@ -468,7 +468,7 @@ def calculate_requested_duration(
 def evaluate_zone(  # noqa: PLR0911
     zone: ZoneState,
     controller: ControllerState,
-    timing: TimingParams,
+    timing: TimingConfig,
     *,
     flush_request: bool = False,
 ) -> ZoneAction:
@@ -537,7 +537,7 @@ def evaluate_zone(  # noqa: PLR0911
 
 def should_request_heat(
     zone: ZoneState,
-    timing: TimingParams,
+    timing: TimingConfig,
 ) -> bool:
     """
     Determine if a zone should contribute to heat request.

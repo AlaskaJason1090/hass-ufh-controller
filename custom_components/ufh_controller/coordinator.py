@@ -37,7 +37,7 @@ from .const import (
     ControllerStatus,
     OperationMode,
     SummerMode,
-    TimingParams,
+    TimingConfig,
     ValveState,
     ZoneStatus,
 )
@@ -120,7 +120,7 @@ class UFHControllerDataUpdateCoordinator(
                 timing_opts = subentry.data.get("timing", {})
                 break
 
-        timing = TimingParams(
+        timing = TimingConfig(
             observation_period=timing_opts.get(
                 "observation_period", DEFAULT_TIMING["observation_period"]
             ),

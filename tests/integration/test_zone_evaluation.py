@@ -2,7 +2,7 @@
 
 import pytest
 
-from custom_components.ufh_controller.const import TimingParams, ValveState
+from custom_components.ufh_controller.const import TimingConfig, ValveState
 from custom_components.ufh_controller.core.controller import ControllerState
 from custom_components.ufh_controller.core.zone import (
     CircuitType,
@@ -17,9 +17,9 @@ class TestEvaluateZoneDisabled:
     """Test zone disabled behavior."""
 
     @pytest.fixture
-    def timing(self) -> TimingParams:
-        """Create default timing params."""
-        return TimingParams()
+    def timing(self) -> TimingConfig:
+        """Create default timing config."""
+        return TimingConfig()
 
     @pytest.fixture
     def controller(self) -> ControllerState:
@@ -27,7 +27,7 @@ class TestEvaluateZoneDisabled:
         return ControllerState()
 
     def test_disabled_zone_valve_off(
-        self, timing: TimingParams, controller: ControllerState
+        self, timing: TimingConfig, controller: ControllerState
     ) -> None:
         """Disabled zone with valve off stays off."""
         zone = ZoneState(zone_id="test", enabled=False, valve_state=ValveState.OFF)
@@ -35,7 +35,7 @@ class TestEvaluateZoneDisabled:
         assert result == ZoneAction.STAY_OFF
 
     def test_disabled_zone_valve_on(
-        self, timing: TimingParams, controller: ControllerState
+        self, timing: TimingConfig, controller: ControllerState
     ) -> None:
         """Disabled zone with valve on turns off."""
         zone = ZoneState(zone_id="test", enabled=False, valve_state=ValveState.ON)
@@ -47,7 +47,7 @@ class TestEvaluateZoneDisabled:
     )
     def test_disabled_zone_valve_unknown_turns_off(
         self,
-        timing: TimingParams,
+        timing: TimingConfig,
         controller: ControllerState,
         valve_state: ValveState,
     ) -> None:
@@ -62,11 +62,11 @@ class TestEvaluateZoneFlushCircuit:
     """Test flush circuit priority behavior."""
 
     @pytest.fixture
-    def timing(self) -> TimingParams:
-        """Create default timing params."""
-        return TimingParams()
+    def timing(self) -> TimingConfig:
+        """Create default timing config."""
+        return TimingConfig()
 
-    def test_flush_during_dhw_no_regular_demand(self, timing: TimingParams) -> None:
+    def test_flush_during_dhw_no_regular_demand(self, timing: TimingConfig) -> None:
         """Flush circuit turns on during DHW when no regular demand."""
         zone = ZoneState(
             zone_id="bathroom",
@@ -81,7 +81,7 @@ class TestEvaluateZoneFlushCircuit:
         result = evaluate_zone(zone, controller, timing, flush_request=True)
         assert result == ZoneAction.TURN_ON
 
-    def test_flush_during_dhw_stays_on(self, timing: TimingParams) -> None:
+    def test_flush_during_dhw_stays_on(self, timing: TimingConfig) -> None:
         """Flush circuit stays on during DHW."""
         zone = ZoneState(
             zone_id="bathroom",
@@ -96,7 +96,7 @@ class TestEvaluateZoneFlushCircuit:
         result = evaluate_zone(zone, controller, timing, flush_request=True)
         assert result == ZoneAction.STAY_ON
 
-    def test_flush_blocked_by_regular_valve_on(self, timing: TimingParams) -> None:
+    def test_flush_blocked_by_regular_valve_on(self, timing: TimingConfig) -> None:
         """Flush circuit blocked when regular circuit valve is ON."""
         flush_zone = ZoneState(
             zone_id="bathroom",
@@ -121,7 +121,7 @@ class TestEvaluateZoneFlushCircuit:
         assert result == ZoneAction.STAY_OFF
 
     def test_flush_not_blocked_by_regular_demand_only(
-        self, timing: TimingParams
+        self, timing: TimingConfig
     ) -> None:
         """Flush circuit NOT blocked when regular has demand but valve is OFF."""
         flush_zone = ZoneState(
@@ -144,7 +144,7 @@ class TestEvaluateZoneFlushCircuit:
         result = evaluate_zone(flush_zone, controller, timing, flush_request=True)
         assert result == ZoneAction.TURN_ON
 
-    def test_flush_disabled_no_priority(self, timing: TimingParams) -> None:
+    def test_flush_disabled_no_priority(self, timing: TimingConfig) -> None:
         """Flush circuit follows normal logic when flush disabled."""
         zone = ZoneState(
             zone_id="bathroom",
@@ -165,9 +165,9 @@ class TestEvaluateZoneWindowBlocking:
     """Test that window state does NOT affect valve control."""
 
     @pytest.fixture
-    def timing(self) -> TimingParams:
-        """Create timing params with 600 second (10 min) window block time."""
-        return TimingParams(window_block_time=600)
+    def timing(self) -> TimingConfig:
+        """Create timing config with 600 second (10 min) window block time."""
+        return TimingConfig(window_block_time=600)
 
     @pytest.fixture
     def controller(self) -> ControllerState:
@@ -175,7 +175,7 @@ class TestEvaluateZoneWindowBlocking:
         return ControllerState()
 
     def test_window_recently_open_valve_follows_quota_off(
-        self, timing: TimingParams, controller: ControllerState
+        self, timing: TimingConfig, controller: ControllerState
     ) -> None:
         """Window recently open doesn't block valve - follows quota (off case)."""
         zone = ZoneState(
@@ -190,7 +190,7 @@ class TestEvaluateZoneWindowBlocking:
         assert result == ZoneAction.TURN_ON
 
     def test_window_recently_open_valve_follows_quota_on(
-        self, timing: TimingParams, controller: ControllerState
+        self, timing: TimingConfig, controller: ControllerState
     ) -> None:
         """Window recently open doesn't turn off valve - follows quota (on case)."""
         zone = ZoneState(
@@ -205,7 +205,7 @@ class TestEvaluateZoneWindowBlocking:
         assert result == ZoneAction.STAY_ON
 
     def test_window_recently_open_quota_met_turns_off(
-        self, timing: TimingParams, controller: ControllerState
+        self, timing: TimingConfig, controller: ControllerState
     ) -> None:
         """When quota met, valve turns off regardless of window state."""
         zone = ZoneState(
@@ -220,7 +220,7 @@ class TestEvaluateZoneWindowBlocking:
         assert result == ZoneAction.TURN_OFF
 
     def test_no_window_state_normal_operation(
-        self, timing: TimingParams, controller: ControllerState
+        self, timing: TimingConfig, controller: ControllerState
     ) -> None:
         """With no window activity, normal quota-based operation."""
         zone = ZoneState(
@@ -238,11 +238,11 @@ class TestEvaluateZonePeriodEndFreeze:
     """Test period end freeze behavior to prevent valve cycling at boundaries."""
 
     @pytest.fixture
-    def timing(self) -> TimingParams:
-        """Create timing params with 7200s period and 540s min run time."""
-        return TimingParams(observation_period=7200, min_run_time=540)
+    def timing(self) -> TimingConfig:
+        """Create timing config with 7200s period and 540s min run time."""
+        return TimingConfig(observation_period=7200, min_run_time=540)
 
-    def test_near_period_end_valve_on_stays_on(self, timing: TimingParams) -> None:
+    def test_near_period_end_valve_on_stays_on(self, timing: TimingConfig) -> None:
         """Valve on stays on when near end of observation period."""
         zone = ZoneState(
             zone_id="test",
@@ -255,7 +255,7 @@ class TestEvaluateZonePeriodEndFreeze:
         result = evaluate_zone(zone, controller, timing)
         assert result == ZoneAction.STAY_ON
 
-    def test_near_period_end_valve_off_stays_off(self, timing: TimingParams) -> None:
+    def test_near_period_end_valve_off_stays_off(self, timing: TimingConfig) -> None:
         """Valve off stays off when near end of observation period."""
         zone = ZoneState(
             zone_id="test",
@@ -268,7 +268,7 @@ class TestEvaluateZonePeriodEndFreeze:
         result = evaluate_zone(zone, controller, timing)
         assert result == ZoneAction.STAY_OFF
 
-    def test_enough_time_remaining_normal_behavior(self, timing: TimingParams) -> None:
+    def test_enough_time_remaining_normal_behavior(self, timing: TimingConfig) -> None:
         """Normal behavior when enough time remaining in period."""
         zone = ZoneState(
             zone_id="test",
@@ -281,7 +281,7 @@ class TestEvaluateZonePeriodEndFreeze:
         result = evaluate_zone(zone, controller, timing)
         assert result == ZoneAction.TURN_ON
 
-    def test_exactly_at_threshold_normal_behavior(self, timing: TimingParams) -> None:
+    def test_exactly_at_threshold_normal_behavior(self, timing: TimingConfig) -> None:
         """Normal behavior when exactly at min_run_time threshold."""
         zone = ZoneState(
             zone_id="test",
@@ -294,7 +294,7 @@ class TestEvaluateZonePeriodEndFreeze:
         result = evaluate_zone(zone, controller, timing)
         assert result == ZoneAction.TURN_ON
 
-    def test_one_second_below_threshold_freezes(self, timing: TimingParams) -> None:
+    def test_one_second_below_threshold_freezes(self, timing: TimingConfig) -> None:
         """Freeze behavior when just below threshold."""
         zone = ZoneState(
             zone_id="test",
@@ -308,7 +308,7 @@ class TestEvaluateZonePeriodEndFreeze:
         assert result == ZoneAction.STAY_OFF
 
     def test_period_freeze_with_window_recently_open(
-        self, timing: TimingParams
+        self, timing: TimingConfig
     ) -> None:
         """Period freeze still applies even when window was recently open."""
         zone = ZoneState(
@@ -329,9 +329,9 @@ class TestEvaluateZoneQuotaScheduling:
     """Test quota-based scheduling behavior."""
 
     @pytest.fixture
-    def timing(self) -> TimingParams:
-        """Create timing params with 9 minute min run time."""
-        return TimingParams(min_run_time=540)
+    def timing(self) -> TimingConfig:
+        """Create timing config with 9 minute min run time."""
+        return TimingConfig(min_run_time=540)
 
     @pytest.fixture
     def controller(self) -> ControllerState:
@@ -339,7 +339,7 @@ class TestEvaluateZoneQuotaScheduling:
         return ControllerState()
 
     def test_quota_remaining_turns_on(
-        self, timing: TimingParams, controller: ControllerState
+        self, timing: TimingConfig, controller: ControllerState
     ) -> None:
         """Zone with quota remaining turns on."""
         zone = ZoneState(
@@ -352,7 +352,7 @@ class TestEvaluateZoneQuotaScheduling:
         assert result == ZoneAction.TURN_ON
 
     def test_quota_remaining_stays_on(
-        self, timing: TimingParams, controller: ControllerState
+        self, timing: TimingConfig, controller: ControllerState
     ) -> None:
         """Zone already on with quota stays on."""
         zone = ZoneState(
@@ -365,7 +365,7 @@ class TestEvaluateZoneQuotaScheduling:
         assert result == ZoneAction.STAY_ON
 
     def test_quota_too_small_stays_off(
-        self, timing: TimingParams, controller: ControllerState
+        self, timing: TimingConfig, controller: ControllerState
     ) -> None:
         """Zone with quota less than min_run_time stays off."""
         zone = ZoneState(
@@ -378,7 +378,7 @@ class TestEvaluateZoneQuotaScheduling:
         assert result == ZoneAction.STAY_OFF
 
     def test_quota_met_turns_off(
-        self, timing: TimingParams, controller: ControllerState
+        self, timing: TimingConfig, controller: ControllerState
     ) -> None:
         """Zone that met quota turns off."""
         zone = ZoneState(
@@ -391,7 +391,7 @@ class TestEvaluateZoneQuotaScheduling:
         assert result == ZoneAction.TURN_OFF
 
     def test_quota_met_stays_off(
-        self, timing: TimingParams, controller: ControllerState
+        self, timing: TimingConfig, controller: ControllerState
     ) -> None:
         """Zone that met quota stays off."""
         zone = ZoneState(
@@ -404,7 +404,7 @@ class TestEvaluateZoneQuotaScheduling:
         assert result == ZoneAction.STAY_OFF
 
     def test_zero_quota_stays_off(
-        self, timing: TimingParams, controller: ControllerState
+        self, timing: TimingConfig, controller: ControllerState
     ) -> None:
         """Zone with zero quota stays off."""
         zone = ZoneState(
@@ -421,7 +421,7 @@ class TestEvaluateZoneQuotaScheduling:
     )
     def test_quota_met_unknown_valve_turns_off(
         self,
-        timing: TimingParams,
+        timing: TimingConfig,
         controller: ControllerState,
         valve_state: ValveState,
     ) -> None:
@@ -441,11 +441,11 @@ class TestEvaluateZoneDHWBlocking:
     """Test DHW blocking for regular circuits."""
 
     @pytest.fixture
-    def timing(self) -> TimingParams:
-        """Create default timing params."""
-        return TimingParams()
+    def timing(self) -> TimingConfig:
+        """Create default timing config."""
+        return TimingConfig()
 
-    def test_regular_blocked_during_dhw(self, timing: TimingParams) -> None:
+    def test_regular_blocked_during_dhw(self, timing: TimingConfig) -> None:
         """Regular circuit blocked during DHW heating."""
         zone = ZoneState(
             zone_id="test",
@@ -458,7 +458,7 @@ class TestEvaluateZoneDHWBlocking:
         result = evaluate_zone(zone, controller, timing)
         assert result == ZoneAction.STAY_OFF
 
-    def test_regular_runs_without_dhw(self, timing: TimingParams) -> None:
+    def test_regular_runs_without_dhw(self, timing: TimingConfig) -> None:
         """Regular circuit runs when DHW inactive."""
         zone = ZoneState(
             zone_id="test",
@@ -471,7 +471,7 @@ class TestEvaluateZoneDHWBlocking:
         result = evaluate_zone(zone, controller, timing)
         assert result == ZoneAction.TURN_ON
 
-    def test_regular_stays_on_during_dhw(self, timing: TimingParams) -> None:
+    def test_regular_stays_on_during_dhw(self, timing: TimingConfig) -> None:
         """Regular circuit already ON stays ON during DHW to circulate water."""
         zone = ZoneState(
             zone_id="test",
@@ -486,7 +486,7 @@ class TestEvaluateZoneDHWBlocking:
         assert result == ZoneAction.STAY_ON
 
     def test_regular_turns_off_during_dhw_when_quota_exhausted(
-        self, timing: TimingParams
+        self, timing: TimingConfig
     ) -> None:
         """Regular circuit turns OFF during DHW when quota is exhausted."""
         zone = ZoneState(
@@ -506,17 +506,17 @@ class TestShouldRequestHeat:
     """Test cases for should_request_heat."""
 
     @pytest.fixture
-    def timing(self) -> TimingParams:
-        """Create timing params."""
-        return TimingParams(closing_warning_duration=240)
+    def timing(self) -> TimingConfig:
+        """Create timing config."""
+        return TimingConfig(closing_warning_duration=240)
 
-    def test_valve_off_no_request(self, timing: TimingParams) -> None:
+    def test_valve_off_no_request(self, timing: TimingConfig) -> None:
         """Valve off doesn't request heat."""
         zone = ZoneState(zone_id="test", valve_state=ValveState.OFF)
         result = should_request_heat(zone, timing)
         assert result is False
 
-    def test_disabled_zone_no_request(self, timing: TimingParams) -> None:
+    def test_disabled_zone_no_request(self, timing: TimingConfig) -> None:
         """Disabled zone doesn't request heat."""
         zone = ZoneState(
             zone_id="test",
@@ -528,7 +528,7 @@ class TestShouldRequestHeat:
         result = should_request_heat(zone, timing)
         assert result is False
 
-    def test_valve_not_fully_open_no_request(self, timing: TimingParams) -> None:
+    def test_valve_not_fully_open_no_request(self, timing: TimingConfig) -> None:
         """Valve not fully open doesn't request heat."""
         zone = ZoneState(
             zone_id="test",
@@ -540,7 +540,7 @@ class TestShouldRequestHeat:
         result = should_request_heat(zone, timing)
         assert result is False
 
-    def test_valve_about_to_close_no_request(self, timing: TimingParams) -> None:
+    def test_valve_about_to_close_no_request(self, timing: TimingConfig) -> None:
         """Valve about to close doesn't request heat."""
         zone = ZoneState(
             zone_id="test",
@@ -552,7 +552,7 @@ class TestShouldRequestHeat:
         result = should_request_heat(zone, timing)
         assert result is False
 
-    def test_valve_fully_open_requests_heat(self, timing: TimingParams) -> None:
+    def test_valve_fully_open_requests_heat(self, timing: TimingConfig) -> None:
         """Valve fully open with quota requests heat."""
         zone = ZoneState(
             zone_id="test",

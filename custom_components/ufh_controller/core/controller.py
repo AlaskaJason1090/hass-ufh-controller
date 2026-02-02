@@ -14,7 +14,7 @@ from custom_components.ufh_controller.const import (
     DEFAULT_CYCLE_MODE_HOURS,
     OperationMode,
     SummerMode,
-    TimingParams,
+    TimingConfig,
     ValveState,
 )
 
@@ -60,7 +60,7 @@ class ControllerConfig:
     supply_temp_entity: str | None = None
     outdoor_temp_entity: str | None = None
     heating_curve: HeatingCurveConfig = field(default_factory=HeatingCurveConfig)
-    timing: TimingParams = field(default_factory=TimingParams)
+    timing: TimingConfig = field(default_factory=TimingConfig)
     zones: list[ZoneConfig] = field(default_factory=list)
 
 
