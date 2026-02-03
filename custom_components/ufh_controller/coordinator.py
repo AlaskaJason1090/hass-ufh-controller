@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -55,8 +56,61 @@ from .core.zone import (
 from .recorder import get_state_average, was_any_window_open_recently
 
 # Storage constants
-STORAGE_VERSION = 1
+STORAGE_VERSION = 2
 STORAGE_KEY = "ufh_controller"
+
+
+class UFHControllerStore(Store[dict[str, Any]]):
+    """Store with V1→V2 migration support."""
+
+    async def _async_migrate_func(
+        self,
+        old_major_version: int,
+        old_minor_version: int,  # noqa: ARG002
+        old_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Migrate storage data to current version."""
+        if old_major_version == 1:
+            return self._migrate_v1_to_v2(old_data)
+        return old_data
+
+    @staticmethod
+    def _migrate_v1_to_v2(old_data: dict[str, Any]) -> dict[str, Any]:
+        """Migrate V1 storage format to V2 format."""
+        # Build controller dict from V1 top-level keys
+        controller = {
+            "mode": old_data.get("controller_mode"),
+            "flush_enabled": old_data.get("flush_enabled", False),
+        }
+
+        # Migrate zone data
+        zones: dict[str, Any] = {}
+        for zone_id, zone_state in old_data.get("zones", {}).items():
+            migrated = {
+                "setpoint": zone_state.get("setpoint"),
+                "enabled": zone_state.get("enabled"),
+                "preset_mode": zone_state.get("preset_mode"),
+                "used_duration": zone_state.get("used_duration"),
+                # PID key renames
+                "pid_error": zone_state.get("error"),
+                "pid_proportional": zone_state.get("p_term"),
+                "pid_integral": zone_state.get("i_term"),
+                "pid_derivative": zone_state.get("d_term"),
+                "duty_cycle": zone_state.get("duty_cycle"),
+                # Temperature: V1 "temperature" → V2 "current"
+                "current": zone_state.get("temperature"),
+                # display_temp: same key in both versions
+                "display_temp": zone_state.get("display_temp"),
+            }
+            zones[zone_id] = {k: v for k, v in migrated.items() if v is not None}
+
+        return {
+            "controller": controller,
+            "zones": zones,
+            "last_update_success_time": old_data.get("last_update_success_time"),
+            "last_force_update": old_data.get("last_force_update"),
+        }
+
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -90,7 +144,7 @@ class UFHControllerDataUpdateCoordinator(
         self.config_entry = entry
 
         # Storage for crash resilience
-        self._store: Store[dict[str, Any]] = Store(
+        self._store = UFHControllerStore(
             hass,
             STORAGE_VERSION,
             f"{STORAGE_KEY}.{entry.entry_id}",
@@ -215,7 +269,7 @@ class UFHControllerDataUpdateCoordinator(
         return self._controller
 
     async def async_load_stored_state(self) -> None:
-        """Load state from storage (fallback if RestoreEntity fails)."""
+        """Load state from storage (V2 format, migration handled by Store)."""
         if self._state_restored:
             return
 
@@ -224,35 +278,28 @@ class UFHControllerDataUpdateCoordinator(
             self._state_restored = True
             return
 
-        # Restore last update timestamp from base class
-        if "last_update_success_time" in stored_data:
-            try:
-                self.last_update_success_time = datetime.fromisoformat(
-                    stored_data["last_update_success_time"]
-                )
-            except (ValueError, TypeError):
-                # Invalid timestamp format, start fresh
-                self.last_update_success_time = None
+        # Data is already V2 format (Store handles migration)
+        self._restore_timestamps(stored_data)
 
-        # Restore last force update for observation period tracking
-        if "last_force_update" in stored_data:
-            try:
-                self._last_force_update = datetime.fromisoformat(
-                    stored_data["last_force_update"]
-                )
-            except (ValueError, TypeError):
-                # Invalid timestamp format, will trigger reset on first update
-                self._last_force_update = None
+        controller_data = stored_data.get("controller", {})
+        self._restore_controller_state(controller_data)
 
-        # Restore controller-level state using shared method
-        self._restore_controller_state(stored_data)
-
-        # Restore zone state
         zones_data = stored_data.get("zones", {})
         for zone_id, zone_state in zones_data.items():
-            self._restore_zone_state(zone_id, zone_state)
+            if zone_id in self._controller.zone_ids:
+                self._restore_zone_state(zone_id, zone_state)
 
         self._state_restored = True
+
+    def _restore_timestamps(self, stored_data: dict[str, Any]) -> None:
+        """Restore timestamps from stored data."""
+        if ts := stored_data.get("last_update_success_time"):
+            with contextlib.suppress(ValueError, TypeError):
+                self.last_update_success_time = datetime.fromisoformat(ts)
+
+        if ts := stored_data.get("last_force_update"):
+            with contextlib.suppress(ValueError, TypeError):
+                self._last_force_update = datetime.fromisoformat(ts)
 
     async def async_config_entry_first_refresh(self) -> None:
         """Perform first refresh and set up state change listeners."""
@@ -337,87 +384,48 @@ class UFHControllerDataUpdateCoordinator(
         self.hass.async_create_task(self.async_request_refresh())
 
     def _restore_zone_state(self, zone_id: str, zone_state: dict[str, Any]) -> None:
-        """Restore state for a single zone from storage."""
+        """Restore state for a single zone from V2 storage format."""
         runtime = self._controller.get_zone_runtime(zone_id)
-        if runtime is None:
-            return
 
         # Restore full PID state if available (only if not yet calculated)
         if runtime.pid.state is None and "duty_cycle" in zone_state:
             pid_state = PIDState(
-                error=zone_state.get("error", 0.0),
-                p_term=zone_state.get("p_term", 0.0),
-                i_term=zone_state.get("i_term", 0.0),
-                d_term=zone_state.get("d_term", 0.0),
+                error=zone_state.get("pid_error", 0.0),
+                p_term=zone_state.get("pid_proportional", 0.0),
+                i_term=zone_state.get("pid_integral", 0.0),
+                d_term=zone_state.get("pid_derivative", 0.0),
                 duty_cycle=zone_state.get("duty_cycle", 0.0),
             )
             runtime.pid.set_state(pid_state)
 
-        # Restore setpoint
-        if "setpoint" in zone_state:
-            stored_setpoint = zone_state["setpoint"]
-            if stored_setpoint != runtime.state.setpoint:
-                self._controller.set_zone_setpoint(zone_id, stored_setpoint)
+        if (
+            "setpoint" in zone_state
+            and zone_state["setpoint"] != runtime.state.setpoint
+        ):
+            self._controller.set_zone_setpoint(zone_id, zone_state["setpoint"])
 
-        # Restore enabled state
-        if "enabled" in zone_state:
-            stored_enabled = zone_state["enabled"]
-            if stored_enabled != runtime.state.enabled:
-                self._controller.set_zone_enabled(zone_id, enabled=stored_enabled)
+        if "enabled" in zone_state and zone_state["enabled"] != runtime.state.enabled:
+            self._controller.set_zone_enabled(zone_id, enabled=zone_state["enabled"])
 
-        # Restore preset mode
         if "preset_mode" in zone_state:
             runtime.state.preset_mode = zone_state["preset_mode"]
 
-        # Restore temperature (EMA value) for smooth continuity across restarts
-        if "temperature" in zone_state:
-            runtime.state.current = zone_state["temperature"]
+        # Restore EMA-smoothed temperature for PID continuity
+        if "current" in zone_state:
+            runtime.state.current = zone_state["current"]
 
         # Restore display temperature for immediate climate entity availability
         if "display_temp" in zone_state:
             runtime.state.display_temp = zone_state["display_temp"]
 
-        # Restore used_duration
         if "used_duration" in zone_state:
             runtime.state.used_duration = zone_state["used_duration"]
 
     def _build_storage_state(self) -> dict[str, Any]:
         """Build state dictionary for persistent storage."""
-        zones_data: dict[str, dict[str, Any]] = {}
-
-        for zone_id in self._controller.zone_ids:
-            runtime = self._controller.get_zone_runtime(zone_id)
-            if runtime is not None:
-                zone_data: dict[str, Any] = {
-                    "setpoint": runtime.state.setpoint,
-                    "enabled": runtime.state.enabled,
-                }
-                # Save full PID state if available
-                if runtime.pid.state is not None:
-                    zone_data["error"] = runtime.pid.state.error
-                    zone_data["p_term"] = runtime.pid.state.p_term
-                    zone_data["i_term"] = runtime.pid.state.i_term
-                    zone_data["d_term"] = runtime.pid.state.d_term
-                    zone_data["duty_cycle"] = runtime.pid.state.duty_cycle
-                # Include preset_mode if set
-                if runtime.state.preset_mode is not None:
-                    zone_data["preset_mode"] = runtime.state.preset_mode
-                # Save temperature (EMA value) for smooth continuity across restarts
-                if runtime.state.current is not None:
-                    zone_data["temperature"] = runtime.state.current
-                # Save display temperature for immediate availability on restore
-                if runtime.state.display_temp is not None:
-                    zone_data["display_temp"] = runtime.state.display_temp
-                # Save used_duration for continuity within observation period
-                zone_data["used_duration"] = runtime.state.used_duration
-                zones_data[zone_id] = zone_data
-
-        data = {
-            "version": STORAGE_VERSION,
-            "saved_at": datetime.now(UTC).isoformat(),
-            "controller_mode": self._controller.mode,
-            "flush_enabled": self._controller.state.flush_enabled,
-            "zones": zones_data,
+        data: dict[str, Any] = {
+            "controller": self.data["controller"],
+            "zones": self.data["zones"],
         }
 
         # Include last update timestamp from base class
@@ -463,12 +471,9 @@ class UFHControllerDataUpdateCoordinator(
         # Close all valves
         for zone_id in self._controller.zone_ids:
             runtime = self._controller.get_zone_runtime(zone_id)
-            if runtime:
-                await self._call_switch_service(
-                    runtime.config.valve_switch, turn_on=False
-                )
-                # Update zone state to reflect valve is off
-                runtime.state.valve_state = ValveState.OFF
+            await self._call_switch_service(runtime.config.valve_switch, turn_on=False)
+            # Update zone state to reflect valve is off
+            runtime.state.valve_state = ValveState.OFF
 
         # Turn off heat request
         await self._execute_heat_request(heat_request=False)
@@ -714,8 +719,6 @@ class UFHControllerDataUpdateCoordinator(
         Zone failures are tracked per-zone and don't affect other zones.
         """
         runtime = self._controller.get_zone_runtime(zone_id)
-        if runtime is None:
-            return  # Zone doesn't exist
 
         # Read current temperature and update zone
         temp_state = self.hass.states.get(runtime.config.temp_sensor)
@@ -884,11 +887,10 @@ class UFHControllerDataUpdateCoordinator(
 
     def _update_controller_status_from_zones(self) -> None:
         """Update controller status based on zone statuses."""
-        zone_statuses: list[ZoneStatus] = []
-        for zone_id in self._controller.zone_ids:
-            runtime = self._controller.get_zone_runtime(zone_id)
-            if runtime is not None:
-                zone_statuses.append(runtime.state.zone_status)
+        zone_statuses = [
+            self._controller.get_zone_runtime(zone_id).state.zone_status
+            for zone_id in self._controller.zone_ids
+        ]
 
         if not zone_statuses:
             self._status = ControllerStatus.NORMAL
@@ -933,14 +935,11 @@ class UFHControllerDataUpdateCoordinator(
 
     def _any_zone_in_fail_safe(self) -> bool:
         """Check if any zone is in fail-safe mode."""
-        for zone_id in self._controller.zone_ids:
-            runtime = self._controller.get_zone_runtime(zone_id)
-            if (
-                runtime is not None
-                and runtime.state.zone_status == ZoneStatus.FAIL_SAFE
-            ):
-                return True
-        return False
+        return any(
+            self._controller.get_zone_runtime(zone_id).state.zone_status
+            == ZoneStatus.FAIL_SAFE
+            for zone_id in self._controller.zone_ids
+        )
 
     async def _execute_valve_actions(
         self,
@@ -949,9 +948,6 @@ class UFHControllerDataUpdateCoordinator(
         """Execute valve actions by calling switch services."""
         for zone_id, action in actions.items():
             runtime = self._controller.get_zone_runtime(zone_id)
-            if runtime is None:
-                continue
-
             valve_entity = runtime.config.valve_switch
 
             if action == ZoneAction.TURN_ON:
@@ -969,9 +965,6 @@ class UFHControllerDataUpdateCoordinator(
         """Execute valve actions respecting zone-level fail-safe."""
         for zone_id, action in actions.items():
             runtime = self._controller.get_zone_runtime(zone_id)
-            if runtime is None:
-                continue
-
             valve_entity = runtime.config.valve_switch
 
             # Zone in fail-safe: force valve closed, ignore normal action
@@ -1098,59 +1091,63 @@ class UFHControllerDataUpdateCoordinator(
     def _build_state_dict(self) -> dict[str, Any]:
         """Build state dictionary for entities to consume."""
         # Count zones in each state
-        zones_degraded = 0
-        zones_fail_safe = 0
-        for zone_id in self._controller.zone_ids:
-            runtime = self._controller.get_zone_runtime(zone_id)
-            if runtime is not None:
-                if runtime.state.zone_status == ZoneStatus.DEGRADED:
-                    zones_degraded += 1
-                elif runtime.state.zone_status == ZoneStatus.FAIL_SAFE:
-                    zones_fail_safe += 1
+        zone_statuses = [
+            self._controller.get_zone_runtime(zone_id).state.zone_status
+            for zone_id in self._controller.zone_ids
+        ]
+        zones_degraded = sum(1 for s in zone_statuses if s == ZoneStatus.DEGRADED)
+        zones_fail_safe = sum(1 for s in zone_statuses if s == ZoneStatus.FAIL_SAFE)
 
         # Count zones requesting heat from controller state
-        zones_requesting_heat = sum(self._controller.state.heat_requests.values())
+        requesting_zones = sum(self._controller.state.heat_requests.values())
 
         result: dict[str, Any] = {
-            "mode": self._controller.mode,
-            "zones_requesting_heat": zones_requesting_heat,
-            "observation_start": self._controller.state.observation_start,
-            "controller_status": self._status.value,
-            "zones_degraded": zones_degraded,
-            "zones_fail_safe": zones_fail_safe,
-            "flush_request": self._controller.state.flush_request,
-            "outdoor_temp": self._controller.state.outdoor_temp,
-            "supply_target_temp": self._controller.state.supply_target_temp,
+            "controller": {
+                "mode": self._controller.mode,
+                "requesting_zones": requesting_zones,
+                "observation_start": self._controller.state.observation_start,
+                "period_elapsed": self._controller.state.period_elapsed,
+                "status": self._status.value,
+                "zones_degraded": zones_degraded,
+                "zones_fail_safe": zones_fail_safe,
+                "flush_enabled": self._controller.state.flush_enabled,
+                "dhw_active": self._controller.state.dhw_active,
+                "flush_until": self._controller.state.flush_until,
+                "flush_request": self._controller.state.flush_request,
+                "outdoor_temp": self._controller.state.outdoor_temp,
+                "supply_target_temp": self._controller.state.supply_target_temp,
+            },
             "zones": {},
         }
 
         for zone_id in self._controller.zone_ids:
             runtime = self._controller.get_zone_runtime(zone_id)
-            if runtime is not None:
-                state = runtime.state
-                pid_state = runtime.pid.state
-                # Blocked now means PID is paused due to recent window activity
-                blocked = state.window_recently_open
+            state = runtime.state
+            pid_state = runtime.pid.state
+            # Blocked now means PID is paused due to recent window activity
+            blocked = state.window_recently_open
 
-                result["zones"][zone_id] = {
-                    "current": state.display_temp,
-                    "setpoint": state.setpoint,
-                    "duty_cycle": pid_state.duty_cycle if pid_state else None,
-                    "error": pid_state.error if pid_state else None,
-                    "p_term": pid_state.p_term if pid_state else None,
-                    "i_term": pid_state.i_term if pid_state else None,
-                    "d_term": pid_state.d_term if pid_state else None,
-                    "valve_state": state.valve_state.value,
-                    "enabled": state.enabled,
-                    "blocked": blocked,
-                    "heat_request": self._controller.state.heat_requests.get(
-                        zone_id, False
-                    ),
-                    "flow": state.flow,
-                    "preset_mode": state.preset_mode,
-                    "zone_status": state.zone_status.value,
-                    "supply_coefficient": state.supply_coefficient,
-                }
+            result["zones"][zone_id] = {
+                "current": state.current,
+                "display_temp": state.display_temp,
+                "setpoint": state.setpoint,
+                "duty_cycle": pid_state.duty_cycle if pid_state else None,
+                "pid_error": pid_state.error if pid_state else None,
+                "pid_proportional": pid_state.p_term if pid_state else None,
+                "pid_integral": pid_state.i_term if pid_state else None,
+                "pid_derivative": pid_state.d_term if pid_state else None,
+                "valve_state": state.valve_state.value,
+                "enabled": state.enabled,
+                "blocked": blocked,
+                "heat_request": self._controller.state.heat_requests.get(
+                    zone_id, False
+                ),
+                "flow": state.flow,
+                "preset_mode": state.preset_mode,
+                "zone_status": state.zone_status.value,
+                "supply_coefficient": state.supply_coefficient,
+                "used_duration": state.used_duration,
+            }
 
         return result
 
@@ -1172,26 +1169,23 @@ class UFHControllerDataUpdateCoordinator(
     async def set_zone_preset_mode(self, zone_id: str, preset_mode: str | None) -> None:
         """Set zone preset mode and trigger refresh."""
         runtime = self._controller.get_zone_runtime(zone_id)
-        if runtime is not None:
-            runtime.state.preset_mode = preset_mode
-            await self.async_request_refresh()
+        runtime.state.preset_mode = preset_mode
+        await self.async_request_refresh()
 
     async def set_flush_enabled(self, *, enabled: bool) -> None:
         """Enable or disable flush and trigger refresh."""
         self._controller.state.flush_enabled = enabled
         await self.async_request_refresh()
 
-    def _restore_controller_state(self, stored_data: dict[str, Any]) -> None:
-        """Restore controller-level state from stored data."""
-        # Restore controller mode
-        if "controller_mode" in stored_data:
-            stored_mode = stored_data["controller_mode"]
+    def _restore_controller_state(self, controller_data: dict[str, Any]) -> None:
+        """Restore controller-level state from V2 storage format."""
+        if "mode" in controller_data:
+            stored_mode = controller_data["mode"]
             if stored_mode in [mode.value for mode in OperationMode]:
                 self._controller.mode = stored_mode
 
-        # Restore flush_enabled state
-        if "flush_enabled" in stored_data:
-            self._controller.state.flush_enabled = stored_data["flush_enabled"]
+        if "flush_enabled" in controller_data:
+            self._controller.state.flush_enabled = controller_data["flush_enabled"]
 
     async def async_reload_config(self) -> None:
         """
@@ -1206,6 +1200,9 @@ class UFHControllerDataUpdateCoordinator(
         """
         LOGGER.debug("Reloading controller config in-place")
 
+        # Refresh to update self.data with latest runtime state before capturing
+        await self.async_refresh()
+
         # Capture current state using existing state management
         old_zone_ids = set(self._controller.zone_ids)
         saved_state = self._build_storage_state()
@@ -1216,8 +1213,9 @@ class UFHControllerDataUpdateCoordinator(
         # Rebuild controller with updated config
         self._controller = self._build_controller(self.config_entry)
 
-        # Restore controller-level state using existing method
-        self._restore_controller_state(saved_state)
+        # Restore controller-level state using existing method (V2 format)
+        controller_data = saved_state.get("controller", {})
+        self._restore_controller_state(controller_data)
 
         # Restore flush_until (runtime-only state)
         self._controller.state.flush_until = saved_flush_until
