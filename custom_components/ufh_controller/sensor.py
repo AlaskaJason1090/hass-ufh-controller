@@ -65,6 +65,7 @@ class UFHZoneSensorEntityDescription(SensorEntityDescription):
 
     value_fn: Callable[[dict[str, Any]], float | None]
     icon_fn: Callable[[float | None], str] | None = None
+    entity_registry_visible_default: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)

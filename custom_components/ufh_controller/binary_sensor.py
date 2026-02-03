@@ -33,6 +33,7 @@ class UFHZoneBinarySensorEntityDescription(BinarySensorEntityDescription):
     """Describes UFH zone binary sensor entity."""
 
     value_fn: Callable[[dict[str, Any]], bool]
+    entity_registry_visible_default: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
