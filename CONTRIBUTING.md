@@ -30,7 +30,7 @@ This project includes a dev container configuration for VS Code. Open the projec
 Install dependencies using [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv sync --all-extras
+uv sync --dev
 ```
 
 This installs all dependencies including test and dev extras (pytest, ruff, ty).

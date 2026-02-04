@@ -1298,7 +1298,7 @@ dependencies = [
     { name = "homeassistant" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "bump-my-version" },
     { name = "diff-cover" },
@@ -1309,28 +1309,24 @@ dev = [
     { name = "ruff" },
     { name = "ty" },
 ]
-test = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-homeassistant-custom-component" },
-]
 
 [package.metadata]
 requires-dist = [
-    { name = "bump-my-version", marker = "extra == 'dev'", specifier = ">=1.1.0" },
     { name = "colorlog", specifier = ">=6.10.1" },
-    { name = "diff-cover", marker = "extra == 'dev'", specifier = ">=9.0.0" },
-    { name = "hass-ufh-controller", extras = ["test"], marker = "extra == 'dev'" },
     { name = "homeassistant", specifier = ">=2025.10.0" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.20.0" },
-    { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=4.0.0" },
-    { name = "pytest-homeassistant-custom-component", marker = "extra == 'test'", specifier = ">=0.13.285" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.10" },
-    { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.1a11" },
 ]
-provides-extras = ["test", "dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "bump-my-version", specifier = ">=1.1.0" },
+    { name = "diff-cover", specifier = ">=9.0.0" },
+    { name = "pytest", specifier = ">=7.0.0" },
+    { name = "pytest-asyncio", specifier = ">=0.20.0" },
+    { name = "pytest-cov", specifier = ">=4.0.0" },
+    { name = "pytest-homeassistant-custom-component", specifier = ">=0.13.285" },
+    { name = "ruff", specifier = ">=0.14.10" },
+    { name = "ty", specifier = ">=0.0.1a11" },
+]
 
 [[package]]
 name = "hf-xet"
