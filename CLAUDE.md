@@ -190,8 +190,10 @@ Tests are organized into four directories based on their scope and dependencies:
 
 ### Good Commit History
 - **Each meaningful change deserves its own commit**
+- Prefer new incremental commits over amending
 - Write clear, descriptive commit messages
 - Use conventional format: `Fix X`, `Add Y`, `Update Z`
+- PRs are squash-merged, so we can have detailed commit history during development
 
 ### When to Amend
 Only amend commits for:
