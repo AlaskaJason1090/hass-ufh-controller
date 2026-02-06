@@ -92,7 +92,6 @@ class ZoneState:
 
     # Valve state
     valve_state: ValveState = ValveState.UNKNOWN
-    valve_on_since: datetime | None = None
 
     # Historical averages from Recorder queries
     open_state_avg: float = 0.0
