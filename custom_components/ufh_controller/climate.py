@@ -120,7 +120,7 @@ class UFHZoneClimate(UFHControllerZoneEntity, ClimateEntity):
         if not zone_data.get("enabled", True):
             return HVACAction.OFF
 
-        if zone_data.get("heat_request", False):
+        if zone_data.get("heat", False):
             return HVACAction.HEATING
 
         return HVACAction.IDLE
@@ -179,7 +179,7 @@ class UFHZoneClimate(UFHControllerZoneEntity, ClimateEntity):
             "pid_proportional": zone_data.get("pid_proportional"),
             "pid_integral": zone_data.get("pid_integral"),
             "pid_derivative": zone_data.get("pid_derivative"),
-            "blocked": zone_data.get("blocked"),
-            "heat_request": zone_data.get("heat_request"),
+            "window": zone_data.get("window"),
+            "heat": zone_data.get("heat"),
             "zone_status": zone_data.get("zone_status"),
         }

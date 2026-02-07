@@ -12,6 +12,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, NamedTuple
 
 from custom_components.ufh_controller.const import (
+    DEFAULT_HEAT_SUPPLY_COEFFICIENT_THRESHOLD,
     DEFAULT_PID,
     DEFAULT_SETPOINT,
     DEFAULT_SUPPLY_COEFFICIENT_CAP,
@@ -96,7 +97,8 @@ class ZoneState:
     # Historical averages from Recorder queries
     open_state_avg: float = 0.0
     flow: bool = False
-    window_recently_open: bool = False
+    heat: bool = False
+    window: bool = False
 
     # Derived scheduling values
     supply_coefficient: float | None = None
@@ -113,6 +115,13 @@ class ZoneState:
     zone_status: ZoneStatus = ZoneStatus.INITIALIZING
     last_successful_update: datetime | None = None
     consecutive_failures: int = 0
+
+    @property
+    def remaining_duration(self) -> float:
+        """Remaining quota duration in seconds, zero if disabled."""
+        if self.enabled:
+            return max(0.0, self.requested_duration - self.used_duration)
+        return 0.0
 
 
 @dataclass
@@ -235,7 +244,7 @@ class ZoneRuntime:
             return True
 
         # Window was open recently - pause PID to let temperature stabilize
-        return self.state.window_recently_open
+        return self.state.window
 
     def update_requested_duration(self, observation_period: int) -> None:
         """
@@ -255,19 +264,19 @@ class ZoneRuntime:
         self,
         *,
         open_state_avg: float,
-        window_recently_open: bool,
+        window: bool,
     ) -> None:
         """
         Update zone historical averages from Recorder queries.
 
         Args:
             open_state_avg: Average valve state for open detection.
-            window_recently_open: Was any window open within blocking period.
+            window: Whether a window was open within the blocking period.
 
         """
         self.state.open_state_avg = open_state_avg
         self.state.flow = open_state_avg >= DEFAULT_VALVE_OPEN_THRESHOLD
-        self.state.window_recently_open = window_recently_open
+        self.state.window = window
 
     def update_supply_coefficient(
         self, *, supply_temp: float | None, supply_target_temp: float
@@ -305,6 +314,19 @@ class ZoneRuntime:
         # Calculate as percentage, cap at configured maximum
         self.state.supply_coefficient = min(
             numerator / denominator * 100, DEFAULT_SUPPLY_COEFFICIENT_CAP
+        )
+
+    def update_heat_state(self) -> None:
+        """
+        Derive heat state from flow and supply coefficient.
+
+        Heat requires flow to be established AND supply coefficient above
+        the minimum threshold. When no supply temperature sensor is
+        configured (supply_coefficient is None), heat equals flow.
+        """
+        sc = self.state.supply_coefficient
+        self.state.heat = self.state.flow and (
+            sc is None or sc > DEFAULT_HEAT_SUPPLY_COEFFICIENT_THRESHOLD
         )
 
     def update_used_duration(self, dt: float) -> None:
@@ -527,38 +549,3 @@ def evaluate_zone(  # noqa: PLR0911
 
     # Zone has met its quota
     return ZoneAction.STAY_OFF if valve_off else ZoneAction.TURN_OFF
-
-
-def should_request_heat(
-    zone: ZoneState,
-    timing: TimingConfig,
-) -> bool:
-    """
-    Determine if a zone should contribute to heat request.
-
-    Heat is only requested when the valve is confirmed open and has been
-    open long enough to be fully open. When valve state is unknown or
-    unavailable, heat is NOT requested (conservative approach).
-
-    Args:
-        zone: Current zone state.
-        timing: Timing parameters.
-
-    Returns:
-        True if zone should request heat from boiler.
-
-    """
-    # Only request heat when valve state is confirmed ON
-    if zone.valve_state != ValveState.ON:
-        return False
-
-    if not zone.enabled:
-        return False
-
-    # Wait for valve to fully open
-    if not zone.flow:
-        return False
-
-    # Don't request if zone is about to close
-    remaining_quota = zone.requested_duration - zone.used_duration
-    return remaining_quota >= timing.closing_warning_duration

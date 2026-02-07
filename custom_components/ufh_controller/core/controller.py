@@ -27,7 +27,6 @@ from .zone import (
     ZoneRuntime,
     ZoneState,
     evaluate_zone,
-    should_request_heat,
 )
 
 
@@ -38,7 +37,7 @@ class ControllerState:
     mode: OperationMode = OperationMode.HEAT
     observation_start: datetime = field(default_factory=datetime.now)
     period_elapsed: float = 0.0  # Seconds elapsed in current observation period
-    heat_requests: dict[str, bool] = field(default_factory=dict)
+    heat_request: bool | None = None
     flush_enabled: bool = False
     dhw_active: bool = False
     flush_until: datetime | None = None
@@ -73,7 +72,7 @@ class ControllerActions:
     """
 
     valve_actions: dict[str, ZoneAction] = field(default_factory=dict)
-    heat_requests: dict[str, bool] = field(default_factory=dict)
+    heat_request: bool | None = None
     flush_request: bool = False
 
 
@@ -260,10 +259,9 @@ class HeatingController:
             )
             for zid, rt in self._zones.items()
         }
-        heat_requests = dict.fromkeys(self._zones, True)
         return ControllerActions(
             valve_actions=valve_actions,
-            heat_requests=heat_requests,
+            heat_request=True,
         )
 
     def _evaluate_all_off_mode(self) -> ControllerActions:
@@ -280,10 +278,9 @@ class HeatingController:
             )
             for zid, rt in self._zones.items()
         }
-        heat_requests = dict.fromkeys(self._zones, False)
         return ControllerActions(
             valve_actions=valve_actions,
-            heat_requests=heat_requests,
+            heat_request=False,
         )
 
     def _evaluate_flush_mode(self) -> ControllerActions:
@@ -300,10 +297,9 @@ class HeatingController:
             )
             for zid, rt in self._zones.items()
         }
-        heat_requests = dict.fromkeys(self._zones, False)
         return ControllerActions(
             valve_actions=valve_actions,
-            heat_requests=heat_requests,
+            heat_request=False,
         )
 
     def _evaluate_cycle_mode(self, now: datetime) -> ControllerActions:
@@ -338,10 +334,9 @@ class HeatingController:
                         ZoneAction.TURN_OFF if valve_on else ZoneAction.STAY_OFF
                     )
 
-        heat_requests = dict.fromkeys(self._zones, False)
         return ControllerActions(
             valve_actions=valve_actions,
-            heat_requests=heat_requests,
+            heat_request=False,
         )
 
     def _evaluate_heat_mode(self, now: datetime) -> ControllerActions:
@@ -385,15 +380,20 @@ class HeatingController:
                     flush_request=flush_request,
                 )
 
-        # Calculate per-zone heat requests
-        heat_requests = {
-            zone_id: should_request_heat(rt.state, self.config.timing)
+        # Aggregate heat request from per-zone decisions
+        remaining_durations = {
+            zone_id: rt.state.remaining_duration
             for zone_id, rt in self._zones.items()
+            if rt.state.flow
         }
+        heat_request = any(
+            rd > self.config.timing.closing_warning_duration
+            for rd in remaining_durations.values()
+        )
 
         return ControllerActions(
             valve_actions=valve_actions,
-            heat_requests=heat_requests,
+            heat_request=heat_request,
             flush_request=flush_request,
         )
 

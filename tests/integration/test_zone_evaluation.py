@@ -9,7 +9,6 @@ from custom_components.ufh_controller.core.zone import (
     ZoneAction,
     ZoneState,
     evaluate_zone,
-    should_request_heat,
 )
 
 
@@ -174,14 +173,14 @@ class TestEvaluateZoneWindowBlocking:
         """Create default controller state."""
         return ControllerState()
 
-    def test_window_recently_open_valve_follows_quota_off(
+    def test_paused_valve_follows_quota_off(
         self, timing: TimingConfig, controller: ControllerState
     ) -> None:
         """Window recently open doesn't block valve - follows quota (off case)."""
         zone = ZoneState(
             zone_id="test",
             valve_state=ValveState.OFF,
-            window_recently_open=True,
+            window=True,
             requested_duration=1000.0,
             used_duration=0.0,  # Has quota
         )
@@ -189,14 +188,14 @@ class TestEvaluateZoneWindowBlocking:
         # Valve should turn on based on quota, not blocked by window
         assert result == ZoneAction.TURN_ON
 
-    def test_window_recently_open_valve_follows_quota_on(
+    def test_paused_valve_follows_quota_on(
         self, timing: TimingConfig, controller: ControllerState
     ) -> None:
         """Window recently open doesn't turn off valve - follows quota (on case)."""
         zone = ZoneState(
             zone_id="test",
             valve_state=ValveState.ON,
-            window_recently_open=True,
+            window=True,
             requested_duration=1000.0,
             used_duration=500.0,  # Still has quota
         )
@@ -204,14 +203,14 @@ class TestEvaluateZoneWindowBlocking:
         # Valve should stay on based on quota
         assert result == ZoneAction.STAY_ON
 
-    def test_window_recently_open_quota_met_turns_off(
+    def test_paused_quota_met_turns_off(
         self, timing: TimingConfig, controller: ControllerState
     ) -> None:
         """When quota met, valve turns off regardless of window state."""
         zone = ZoneState(
             zone_id="test",
             valve_state=ValveState.ON,
-            window_recently_open=True,
+            window=True,
             requested_duration=1000.0,
             used_duration=1000.0,  # Quota met
         )
@@ -226,7 +225,7 @@ class TestEvaluateZoneWindowBlocking:
         zone = ZoneState(
             zone_id="test",
             valve_state=ValveState.OFF,
-            window_recently_open=False,
+            window=False,
             requested_duration=1000.0,
             used_duration=0.0,
         )
@@ -307,14 +306,12 @@ class TestEvaluateZonePeriodEndFreeze:
         result = evaluate_zone(zone, controller, timing)
         assert result == ZoneAction.STAY_OFF
 
-    def test_period_freeze_with_window_recently_open(
-        self, timing: TimingConfig
-    ) -> None:
+    def test_period_freeze_with_paused(self, timing: TimingConfig) -> None:
         """Period freeze still applies even when window was recently open."""
         zone = ZoneState(
             zone_id="test",
             valve_state=ValveState.ON,
-            window_recently_open=True,  # Window was recently open
+            window=True,  # Window was recently open
             requested_duration=1000.0,
             used_duration=0.0,
         )
@@ -500,67 +497,3 @@ class TestEvaluateZoneDHWBlocking:
         result = evaluate_zone(zone, controller, timing)
         # Valve should turn off - quota exhaustion takes precedence
         assert result == ZoneAction.TURN_OFF
-
-
-class TestShouldRequestHeat:
-    """Test cases for should_request_heat."""
-
-    @pytest.fixture
-    def timing(self) -> TimingConfig:
-        """Create timing config."""
-        return TimingConfig(closing_warning_duration=240)
-
-    def test_valve_off_no_request(self, timing: TimingConfig) -> None:
-        """Valve off doesn't request heat."""
-        zone = ZoneState(zone_id="test", valve_state=ValveState.OFF)
-        result = should_request_heat(zone, timing)
-        assert result is False
-
-    def test_disabled_zone_no_request(self, timing: TimingConfig) -> None:
-        """Disabled zone doesn't request heat."""
-        zone = ZoneState(
-            zone_id="test",
-            valve_state=ValveState.ON,
-            enabled=False,
-            open_state_avg=1.0,
-            requested_duration=1000.0,
-        )
-        result = should_request_heat(zone, timing)
-        assert result is False
-
-    def test_valve_not_fully_open_no_request(self, timing: TimingConfig) -> None:
-        """Valve not fully open doesn't request heat."""
-        zone = ZoneState(
-            zone_id="test",
-            valve_state=ValveState.ON,
-            open_state_avg=0.50,  # Below 85% threshold
-            requested_duration=1000.0,
-            used_duration=0.0,
-        )
-        result = should_request_heat(zone, timing)
-        assert result is False
-
-    def test_valve_about_to_close_no_request(self, timing: TimingConfig) -> None:
-        """Valve about to close doesn't request heat."""
-        zone = ZoneState(
-            zone_id="test",
-            valve_state=ValveState.ON,
-            open_state_avg=1.0,
-            requested_duration=1000.0,
-            used_duration=900.0,  # Only 100 remaining, less than 240 warning
-        )
-        result = should_request_heat(zone, timing)
-        assert result is False
-
-    def test_valve_fully_open_requests_heat(self, timing: TimingConfig) -> None:
-        """Valve fully open with quota requests heat."""
-        zone = ZoneState(
-            zone_id="test",
-            valve_state=ValveState.ON,
-            open_state_avg=0.90,  # Above 85% threshold
-            flow=True,  # Derived from open_state_avg >= 0.85
-            requested_duration=1000.0,
-            used_duration=0.0,
-        )
-        result = should_request_heat(zone, timing)
-        assert result is True

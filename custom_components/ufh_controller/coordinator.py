@@ -561,8 +561,8 @@ class UFHControllerDataUpdateCoordinator(
         # Update flush_request state for binary_sensor exposure
         self._controller.state.flush_request = actions.flush_request
 
-        # Update per-zone heat requests from controller output
-        self._controller.state.heat_requests = actions.heat_requests
+        # Update controller-level heat request from controller output
+        self._controller.state.heat_request = actions.heat_request
 
         # Execute valve actions with zone-level isolation
         await self._execute_valve_actions_with_isolation(
@@ -570,15 +570,15 @@ class UFHControllerDataUpdateCoordinator(
         )
 
         # Execute heat request and summer mode
-        if actions.heat_requests:
-            # Compute and set heat request from per-zone requests
-            heat_request = any(actions.heat_requests.values())
+        if actions.heat_request is not None:
             await self._execute_heat_request(
-                heat_request=heat_request, force_update=force_update
+                heat_request=actions.heat_request, force_update=force_update
             )
 
             # Derive and update summer mode from heat_request
-            summer_mode = SummerMode.WINTER if heat_request else SummerMode.SUMMER
+            summer_mode = (
+                SummerMode.WINTER if actions.heat_request else SummerMode.SUMMER
+            )
             await self._set_summer_mode(summer_mode, force_update=force_update)
 
         return self._build_state_dict()
@@ -781,7 +781,7 @@ class UFHControllerDataUpdateCoordinator(
         # This query checks the last window_block_time seconds to determine
         # if PID should be paused. Fallback: Check current window state.
         try:
-            window_recently_open = await was_any_window_open_recently(
+            window = await was_any_window_open_recently(
                 self.hass,
                 runtime.config.window_sensors,
                 now,
@@ -789,21 +789,19 @@ class UFHControllerDataUpdateCoordinator(
             )
         except SQLAlchemyError:
             # Fallback to current window state if Recorder unavailable
-            window_recently_open = self._is_any_window_open(
-                runtime.config.window_sensors
-            )
+            window = self._is_any_window_open(runtime.config.window_sensors)
             LOGGER.warning(
                 "Recorder query failed for recent window state, "
                 "using current state for zone %s: %s",
                 zone_id,
-                window_recently_open,
+                window,
                 exc_info=True,
             )
 
         # Update zone with historical data
         runtime.update_historical(
             open_state_avg=open_state_avg,
-            window_recently_open=window_recently_open,
+            window=window,
         )
 
         # Update supply coefficient from supply temperature
@@ -815,6 +813,9 @@ class UFHControllerDataUpdateCoordinator(
                 supply_temp=supply_temp,
                 supply_target_temp=supply_target,
             )
+
+        # Derive heat state from flow + supply coefficient
+        runtime.update_heat_state()
 
         # Update used_duration based on flow and heat performance
         runtime.update_used_duration(dt)
@@ -1091,29 +1092,45 @@ class UFHControllerDataUpdateCoordinator(
     def _build_state_dict(self) -> dict[str, Any]:
         """Build state dictionary for entities to consume."""
         # Count zones in each state
-        zone_statuses = [
-            self._controller.get_zone_runtime(zone_id).state.zone_status
-            for zone_id in self._controller.zone_ids
-        ]
-        zones_degraded = sum(1 for s in zone_statuses if s == ZoneStatus.DEGRADED)
-        zones_fail_safe = sum(1 for s in zone_statuses if s == ZoneStatus.FAIL_SAFE)
+        zone_runtimes = self._controller.zone_runtimes
 
-        # Count zones requesting heat from controller state
-        requesting_zones = sum(self._controller.state.heat_requests.values())
+        # Count zones by state
+        zones_initializing = sum(
+            1 for rt in zone_runtimes if rt.state.zone_status == ZoneStatus.INITIALIZING
+        )
+        zones_normal = sum(
+            1 for rt in zone_runtimes if rt.state.zone_status == ZoneStatus.NORMAL
+        )
+        zones_degraded = sum(
+            1 for rt in zone_runtimes if rt.state.zone_status == ZoneStatus.DEGRADED
+        )
+        zones_fail_safe = sum(
+            1 for rt in zone_runtimes if rt.state.zone_status == ZoneStatus.FAIL_SAFE
+        )
+
+        # Count zones by flow, heat, and window state
+        zones_flowing = sum(rt.state.flow for rt in zone_runtimes)
+        zones_heating = sum(rt.state.heat for rt in zone_runtimes)
+        zones_window = sum(rt.state.window for rt in zone_runtimes)
 
         result: dict[str, Any] = {
             "controller": {
                 "mode": self._controller.mode,
-                "requesting_zones": requesting_zones,
+                "zones_flowing": zones_flowing,
+                "zones_heating": zones_heating,
+                "zones_window": zones_window,
                 "observation_start": self._controller.state.observation_start,
                 "period_elapsed": self._controller.state.period_elapsed,
                 "status": self._status.value,
+                "zones_initializing": zones_initializing,
+                "zones_normal": zones_normal,
                 "zones_degraded": zones_degraded,
                 "zones_fail_safe": zones_fail_safe,
                 "flush_enabled": self._controller.state.flush_enabled,
                 "dhw_active": self._controller.state.dhw_active,
                 "flush_until": self._controller.state.flush_until,
                 "flush_request": self._controller.state.flush_request,
+                "heat_request": self._controller.state.heat_request,
                 "outdoor_temp": self._controller.state.outdoor_temp,
                 "supply_target_temp": self._controller.state.supply_target_temp,
             },
@@ -1124,9 +1141,6 @@ class UFHControllerDataUpdateCoordinator(
             runtime = self._controller.get_zone_runtime(zone_id)
             state = runtime.state
             pid_state = runtime.pid.state
-            # Blocked now means PID is paused due to recent window activity
-            blocked = state.window_recently_open
-
             result["zones"][zone_id] = {
                 "current": state.current,
                 "display_temp": state.display_temp,
@@ -1138,10 +1152,8 @@ class UFHControllerDataUpdateCoordinator(
                 "pid_derivative": pid_state.derivative if pid_state else None,
                 "valve_state": state.valve_state.value,
                 "enabled": state.enabled,
-                "blocked": blocked,
-                "heat_request": self._controller.state.heat_requests.get(
-                    zone_id, False
-                ),
+                "window": state.window,
+                "heat": state.heat,
                 "flow": state.flow,
                 "preset_mode": state.preset_mode,
                 "zone_status": state.zone_status.value,

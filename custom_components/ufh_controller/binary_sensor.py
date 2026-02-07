@@ -47,22 +47,22 @@ class UFHControllerBinarySensorEntityDescription(BinarySensorEntityDescription):
 
 ZONE_BINARY_SENSORS: tuple[UFHZoneBinarySensorEntityDescription, ...] = (
     UFHZoneBinarySensorEntityDescription(
-        key="blocked",
-        translation_key="blocked",
-        device_class=BinarySensorDeviceClass.PROBLEM,
-        value_fn=lambda data: data.get("blocked"),
-    ),
-    UFHZoneBinarySensorEntityDescription(
-        key="heat_request",
-        translation_key="heat_request",
-        device_class=BinarySensorDeviceClass.HEAT,
-        value_fn=lambda data: data.get("heat_request"),
-    ),
-    UFHZoneBinarySensorEntityDescription(
         key="flow",
         translation_key="flow",
         device_class=BinarySensorDeviceClass.RUNNING,
         value_fn=lambda data: data.get("flow"),
+    ),
+    UFHZoneBinarySensorEntityDescription(
+        key="heat",
+        translation_key="heat",
+        device_class=BinarySensorDeviceClass.HEAT,
+        value_fn=lambda data: data.get("heat"),
+    ),
+    UFHZoneBinarySensorEntityDescription(
+        key="window",
+        translation_key="window",
+        device_class=BinarySensorDeviceClass.WINDOW,
+        value_fn=lambda data: data.get("window"),
     ),
 )
 
@@ -77,6 +77,8 @@ def _status_attrs(data: dict[str, Any]) -> dict[str, Any]:
     """Return additional status attributes."""
     return {
         "status": data.get("status"),
+        "zones_initializing": data.get("zones_initializing"),
+        "zones_normal": data.get("zones_normal"),
         "zones_degraded": data.get("zones_degraded"),
         "zones_fail_safe": data.get("zones_fail_safe"),
     }
@@ -89,6 +91,13 @@ STATUS_SENSOR = UFHControllerBinarySensorEntityDescription(
     device_class=BinarySensorDeviceClass.PROBLEM,
     value_fn=_status_value,
     attrs_fn=_status_attrs,
+)
+
+HEAT_REQUEST_SENSOR = UFHControllerBinarySensorEntityDescription(
+    key="heat_request",
+    translation_key="heat_request",
+    device_class=BinarySensorDeviceClass.HEAT,
+    value_fn=lambda data: bool(data.get("heat_request")),
 )
 
 FLUSH_REQUEST_SENSOR = UFHControllerBinarySensorEntityDescription(
@@ -110,7 +119,7 @@ async def async_setup_entry(
     # Add controller-level sensors
     controller_subentry_id = get_controller_subentry_id(entry)
     if controller_subentry_id is not None:
-        controller_descriptions = [STATUS_SENSOR]
+        controller_descriptions = [STATUS_SENSOR, HEAT_REQUEST_SENSOR]
 
         # Only create flush_request sensor if DHW entity is configured
         if entry.data.get("dhw_active_entity"):

@@ -15,6 +15,7 @@ from homeassistant.const import PERCENTAGE, UnitOfTemperature
 
 from .const import (
     ICON_GAUGE_THRESHOLDS,
+    ICON_NUMERIC_MAX,
     ICON_PID_ERROR_THRESHOLD,
     SUBENTRY_TYPE_ZONE,
     ZoneStatus,
@@ -46,6 +47,18 @@ def _pid_error_icon(value: float | None) -> str:
     return "mdi:thermometer-check"
 
 
+def _numeric_icon(value: float | None) -> str:
+    """Return numeric box icon based on value."""
+    if value is None:
+        return "mdi:checkbox-blank-outline"
+    n = int(value)
+    if n < 0:
+        return "mdi:numeric-0-box-outline"
+    if n > ICON_NUMERIC_MAX:
+        return "mdi:numeric-9-plus-box-outline"
+    return f"mdi:numeric-{n}-box-outline"
+
+
 def _gauge_icon(value: float | None) -> str:
     """Return gauge icon based on value."""
     if value is None:
@@ -73,6 +86,7 @@ class UFHControllerSensorEntityDescription(SensorEntityDescription):
     """Describes UFH controller sensor entity."""
 
     value_fn: Callable[[dict[str, Any]], float | int | None]
+    icon_fn: Callable[[float | int | None], str] | None = None
     entity_registry_visible_default: bool = False
 
 
@@ -135,12 +149,31 @@ SUPPLY_COEFFICIENT_SENSOR = UFHZoneSensorEntityDescription(
 )
 
 # Controller-level sensor descriptions
-REQUESTING_ZONES_SENSOR = UFHControllerSensorEntityDescription(
-    key="requesting_zones",
-    translation_key="requesting_zones",
+ZONES_FLOWING_SENSOR = UFHControllerSensorEntityDescription(
+    key="zones_flowing",
+    translation_key="zones_flowing",
     native_unit_of_measurement="zones",
     state_class=SensorStateClass.MEASUREMENT,
-    value_fn=lambda data: data.get("requesting_zones"),
+    value_fn=lambda data: data.get("zones_flowing"),
+    icon_fn=_numeric_icon,
+)
+
+ZONES_HEATING_SENSOR = UFHControllerSensorEntityDescription(
+    key="zones_heating",
+    translation_key="zones_heating",
+    native_unit_of_measurement="zones",
+    state_class=SensorStateClass.MEASUREMENT,
+    value_fn=lambda data: data.get("zones_heating"),
+    icon_fn=_numeric_icon,
+)
+
+ZONES_WINDOW_SENSOR = UFHControllerSensorEntityDescription(
+    key="zones_window",
+    translation_key="zones_window",
+    native_unit_of_measurement="zones",
+    state_class=SensorStateClass.MEASUREMENT,
+    value_fn=lambda data: data.get("zones_window"),
+    icon_fn=_numeric_icon,
 )
 
 SUPPLY_TARGET_SENSOR = UFHControllerSensorEntityDescription(
@@ -169,7 +202,11 @@ async def async_setup_entry(
 
     # Add controller-level sensors
     if controller_subentry_id is not None:
-        controller_descriptions = [REQUESTING_ZONES_SENSOR]
+        controller_descriptions = [
+            ZONES_FLOWING_SENSOR,
+            ZONES_HEATING_SENSOR,
+            ZONES_WINDOW_SENSOR,
+        ]
 
         # Add supply target sensor if outdoor temp entity is configured
         if outdoor_entity:
@@ -292,3 +329,10 @@ class UFHControllerSensor(UFHControllerEntity, SensorEntity):
         """Return the sensor value."""
         controller_data = self.coordinator.data.get("controller", {})
         return self.entity_description.value_fn(controller_data)
+
+    @property
+    def icon(self) -> str | None:
+        """Return dynamic icon if icon_fn is defined."""
+        if self.entity_description.icon_fn is not None:
+            return self.entity_description.icon_fn(self.native_value)
+        return None

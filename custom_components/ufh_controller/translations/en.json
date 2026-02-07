@@ -230,8 +230,14 @@
       "pid_derivative": {
         "name": "PID Derivative"
       },
-      "requesting_zones": {
-        "name": "Requesting Zones"
+      "zones_flowing": {
+        "name": "Zones Flowing"
+      },
+      "zones_heating": {
+        "name": "Zones Heating"
+      },
+      "zones_window": {
+        "name": "Zones Window"
       },
       "supply_coefficient": {
         "name": "Supply Coefficient"
@@ -241,14 +247,17 @@
       }
     },
     "binary_sensor": {
-      "blocked": {
-        "name": "Blocked"
+      "flow": {
+        "name": "Flow"
+      },
+      "heat": {
+        "name": "Heat"
+      },
+      "window": {
+        "name": "Window"
       },
       "heat_request": {
         "name": "Heat Request"
-      },
-      "flow": {
-        "name": "Flow"
       },
       "flush_request": {
         "name": "Flush Request"

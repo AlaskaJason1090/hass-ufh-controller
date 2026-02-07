@@ -90,16 +90,21 @@ async def test_pid_derivative_sensor_created(
     assert state is not None
 
 
-async def test_requesting_zones_sensor_created(
+@pytest.mark.parametrize(
+    "sensor_name",
+    ["zones_flowing", "zones_heating", "zones_window"],
+)
+async def test_controller_sensor_created(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
+    sensor_name: str,
 ) -> None:
-    """Test requesting zones sensor is created on setup."""
+    """Test controller-level sensors are created on setup."""
     mock_config_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    state = hass.states.get("sensor.test_controller_requesting_zones")
+    state = hass.states.get(f"sensor.test_controller_{sensor_name}")
     assert state is not None
 
 
@@ -112,9 +117,9 @@ async def test_sensor_count_with_zone(
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    # 5 zone sensors + 1 controller sensor (requesting_zones) = 6 total
+    # 5 zone sensors + 3 controller sensors (zones_flowing/heating/window) = 8 total
     states = hass.states.async_entity_ids(SENSOR_DOMAIN)
-    assert len(states) == 6
+    assert len(states) == 8
 
 
 async def test_no_zone_sensors_without_zones(
@@ -126,9 +131,9 @@ async def test_no_zone_sensors_without_zones(
     await hass.config_entries.async_setup(mock_config_entry_no_zones.entry_id)
     await hass.async_block_till_done()
 
-    # Only requesting_zones sensor should exist
+    # Only controller sensors (zones_flowing/heating/window) should exist
     states = hass.states.async_entity_ids(SENSOR_DOMAIN)
-    assert len(states) == 1
+    assert len(states) == 3
 
 
 async def test_zone_sensor_unavailable_during_fail_safe(
