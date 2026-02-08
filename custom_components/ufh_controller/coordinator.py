@@ -6,11 +6,25 @@ import contextlib
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from .config_flow import (
+    CONF_DHW_ACTIVE_ENTITY,
+    CONF_HEAT_REQUEST_ENTITY,
+    CONF_OUTDOOR_TEMP_ENTITY,
+    CONF_SUMMER_MODE_ENTITY,
+    CONF_SUPPLY_TEMP_ENTITY,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 from homeassistant.components.select import SERVICE_SELECT_OPTION
-from homeassistant.const import SERVICE_TURN_OFF, SERVICE_TURN_ON, Platform
+from homeassistant.const import (
+    SERVICE_TURN_OFF,
+    SERVICE_TURN_ON,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+    Platform,
+)
 from homeassistant.core import Event, callback
 from homeassistant.helpers.event import (
     EventStateChangedData,
@@ -31,6 +45,7 @@ from .const import (
     DEFAULT_TEMP_EMA_TIME_CONSTANT,
     DEFAULT_TIMING,
     DOMAIN,
+    INITIALIZING_TIMEOUT,
     INITIALIZING_UPDATE_INTERVAL,
     LOGGER,
     SUBENTRY_TYPE_CONTROLLER,
@@ -134,6 +149,7 @@ class UFHControllerDataUpdateCoordinator(
         # Build controller first to get timing config
         self._controller = self._build_controller(entry)
         self._status: ControllerStatus = ControllerStatus.INITIALIZING
+        self._init_started_at: datetime = datetime.now(UTC)
 
         super().__init__(
             hass,
@@ -158,10 +174,16 @@ class UFHControllerDataUpdateCoordinator(
         self._last_force_update: datetime | None = None
 
         # Track expected states for entities we control
-        self._expected_states: dict[str, str | None] = {}
+        self._entities_expected_states: dict[str, str | None] = {}
+
+        # Track entities that haven't reported a valid state
+        self._entities_pending: set[str] = set()
+
+        # Track entities that should trigger coordinator refresh
+        self._entities_refresh_trigger: set[str] = set()
 
         # Track listener unsubscribe callback for re-setup on config reload
-        self._listener_unsub: Callable[[], None] | None = None
+        self._entities_listener_unsub: Callable[[], None] | None = None
 
     def _build_controller(self, entry: UFHControllerConfigEntry) -> HeatingController:
         """Build HeatingController from config entry."""
@@ -251,11 +273,11 @@ class UFHControllerDataUpdateCoordinator(
         config = ControllerConfig(
             controller_id=data["controller_id"],
             name=data["name"],
-            heat_request_entity=data.get("heat_request_entity"),
-            dhw_active_entity=data.get("dhw_active_entity"),
-            summer_mode_entity=data.get("summer_mode_entity"),
-            supply_temp_entity=data.get("supply_temp_entity"),
-            outdoor_temp_entity=data.get("outdoor_temp_entity"),
+            heat_request_entity=data.get(CONF_HEAT_REQUEST_ENTITY),
+            dhw_active_entity=data.get(CONF_DHW_ACTIVE_ENTITY),
+            summer_mode_entity=data.get(CONF_SUMMER_MODE_ENTITY),
+            supply_temp_entity=data.get(CONF_SUPPLY_TEMP_ENTITY),
+            outdoor_temp_entity=data.get(CONF_OUTDOOR_TEMP_ENTITY),
             heating_curve=heating_curve,
             timing=timing,
             zones=zones,
@@ -308,35 +330,56 @@ class UFHControllerDataUpdateCoordinator(
 
     def _async_setup_listeners(self) -> None:
         """Set up state change listeners for controller and zone entities."""
-        # Unsubscribe from old listeners if they exist (for config reload)
-        if self._listener_unsub is not None:
-            self._listener_unsub()
-            self._listener_unsub = None
-
-        # Collect all configured entity IDs from config entry (skip None/empty)
-        entity_ids: list[str] = []
         entry = self.config_entry
 
-        # Controller-level entities
-        if heat_request := entry.data.get("heat_request_entity"):
-            entity_ids.append(heat_request)
-        if summer_mode := entry.data.get("summer_mode_entity"):
-            entity_ids.append(summer_mode)
-        if dhw_active := entry.data.get("dhw_active_entity"):
-            entity_ids.append(dhw_active)
+        # Unsubscribe from old listeners if they exist (for config reload)
+        if self._entities_listener_unsub is not None:
+            self._entities_listener_unsub()
+            self._entities_listener_unsub = None
 
-        # Zone valve switches from subentries
-        entity_ids.extend(
+        self._entities_pending = set()
+        self._entities_refresh_trigger = set()
+
+        # Collect Controller-level entities
+        if heat_request := entry.data.get(CONF_HEAT_REQUEST_ENTITY):
+            self._entities_pending.add(heat_request)
+            self._entities_refresh_trigger.add(heat_request)
+        if dhw_active := entry.data.get(CONF_DHW_ACTIVE_ENTITY):
+            self._entities_pending.add(dhw_active)
+            self._entities_refresh_trigger.add(dhw_active)
+        if summer_mode := entry.data.get(CONF_SUMMER_MODE_ENTITY):
+            self._entities_pending.add(summer_mode)
+            self._entities_refresh_trigger.add(summer_mode)
+        if supply_temp := entry.data.get(CONF_SUPPLY_TEMP_ENTITY):
+            self._entities_pending.add(supply_temp)
+        if outdoor_temp := entry.data.get(CONF_OUTDOOR_TEMP_ENTITY):
+            self._entities_pending.add(outdoor_temp)
+
+        # Collect Zone temperature sensors
+        zone_temp_sensors = {
+            subentry.data["temp_sensor"]
+            for subentry in entry.subentries.values()
+            if subentry.subentry_type == SUBENTRY_TYPE_ZONE
+        }
+        self._entities_pending.update(zone_temp_sensors)
+
+        # Collect Zone valve switches
+        zone_valve_switches = {
             subentry.data["valve_switch"]
             for subentry in entry.subentries.values()
             if subentry.subentry_type == SUBENTRY_TYPE_ZONE
-        )
+        }
+        self._entities_pending.update(zone_valve_switches)
+        self._entities_refresh_trigger.update(zone_valve_switches)
+
+        # Collect entities for state change tracking
+        entity_ids = self._entities_pending.union(self._entities_refresh_trigger)
 
         if not entity_ids:
             return
 
         # Subscribe to state changes
-        self._listener_unsub = async_track_state_change_event(
+        self._entities_listener_unsub = async_track_state_change_event(
             self.hass, entity_ids, self._on_external_entity_change
         )
         LOGGER.debug("Subscribed to state changes for entities: %s", entity_ids)
@@ -350,9 +393,9 @@ class UFHControllerDataUpdateCoordinator(
         It handles cleanup of listeners that may have been set up multiple times
         during in-place config reloads.
         """
-        if self._listener_unsub is not None:
-            self._listener_unsub()
-            self._listener_unsub = None
+        if self._entities_listener_unsub is not None:
+            self._entities_listener_unsub()
+            self._entities_listener_unsub = None
             LOGGER.debug("Unsubscribed state change listeners on shutdown")
 
     @callback
@@ -366,22 +409,31 @@ class UFHControllerDataUpdateCoordinator(
             return
 
         # Check if this state change matches what we expected (self-initiated change)
-        expected = self._expected_states.get(entity_id)
+        expected = self._entities_expected_states.get(entity_id)
         if expected is not None and new_state.state == expected:
             # clear expectation; ignore the event
-            self._expected_states[entity_id] = None
+            self._entities_expected_states[entity_id] = None
             return
 
+        if new_state.state in {STATE_UNAVAILABLE, STATE_UNKNOWN}:
+            # value unavailable/unknown; ignore the event
+            return
+
+        # Track entity readiness for initialization
+        if entity_id in self._entities_pending:
+            self._entities_pending.discard(entity_id)
+
         # External change - request refresh
-        old_state = event.data.get("old_state")
-        old_state_str = old_state.state if old_state else None
-        LOGGER.debug(
-            "External state change detected for %s: %s -> %s, requesting refresh",
-            entity_id,
-            old_state_str,
-            new_state.state,
-        )
-        self.hass.async_create_task(self.async_request_refresh())
+        if entity_id in self._entities_refresh_trigger:
+            old_state = event.data.get("old_state")
+            old_state_str = old_state.state if old_state else None
+            LOGGER.debug(
+                "External state change detected for %s: %s -> %s, requesting refresh",
+                entity_id,
+                old_state_str,
+                new_state.state,
+            )
+            self.hass.async_create_task(self.async_request_refresh())
 
     def _restore_zone_state(self, zone_id: str, zone_state: dict[str, Any]) -> None:
         """Restore state for a single zone from V2 storage format."""
@@ -482,7 +534,7 @@ class UFHControllerDataUpdateCoordinator(
         summer_entity = self._controller.config.summer_mode_entity
         if summer_entity:
             # Track expected state for external change detection
-            self._expected_states[summer_entity] = SummerMode.AUTO
+            self._entities_expected_states[summer_entity] = SummerMode.AUTO
 
             await self.hass.services.async_call(
                 Platform.SELECT,
@@ -522,6 +574,14 @@ class UFHControllerDataUpdateCoordinator(
         # Handle observation period transition
         force_update = self._handle_observation_period_transition(now)
 
+        # Check current state of pending entities
+        self._entities_pending = {
+            eid
+            for eid in self._entities_pending
+            if (state := self.hass.states.get(eid)) is None
+            or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+        }
+
         # Check DHW active state
         await self._update_dhw_state()
 
@@ -534,8 +594,8 @@ class UFHControllerDataUpdateCoordinator(
 
         previous_status = self._status
 
-        # Update controller status from zone statuses
-        self._update_controller_status_from_zones()
+        # Update controller status from pending entities and zone statuses
+        self._update_controller_status(now)
 
         # Detect initialization finished
         if (
@@ -886,8 +946,19 @@ class UFHControllerDataUpdateCoordinator(
         elif result.transition == ZoneStatusTransition.RECOVERED:
             LOGGER.info("Zone %s recovered to normal operation", zone_id)
 
-    def _update_controller_status_from_zones(self) -> None:
+    def _update_controller_status(self, now: datetime) -> None:
         """Update controller status based on zone statuses."""
+        # Defer transition out of INITIALIZING while entities haven't reported yet
+        if self._status == ControllerStatus.INITIALIZING and self._entities_pending:
+            elapsed = (now - self._init_started_at).total_seconds()
+            if elapsed < INITIALIZING_TIMEOUT:
+                return  # remain INITIALIZING
+
+            LOGGER.warning(
+                "Timed out waiting for entities to report valid state: %s",
+                self._entities_pending,
+            )
+
         zone_statuses = [
             self._controller.get_zone_runtime(zone_id).state.zone_status
             for zone_id in self._controller.zone_ids
@@ -1043,7 +1114,7 @@ class UFHControllerDataUpdateCoordinator(
             return
 
         # Track expected state for external change detection
-        self._expected_states[entity_id] = summer_mode
+        self._entities_expected_states[entity_id] = summer_mode
 
         # Call select service to change mode
         await self.hass.services.async_call(
@@ -1076,7 +1147,7 @@ class UFHControllerDataUpdateCoordinator(
             return
 
         # Track expected state for external change detection
-        self._expected_states[entity_id] = "on" if turn_on else "off"
+        self._entities_expected_states[entity_id] = "on" if turn_on else "off"
 
         await self.hass.services.async_call(
             Platform.SWITCH,
@@ -1219,18 +1290,14 @@ class UFHControllerDataUpdateCoordinator(
         old_zone_ids = set(self._controller.zone_ids)
         saved_state = self._build_storage_state()
 
-        # Preserve flush_until separately (not persisted to storage)
-        saved_flush_until = self._controller.state.flush_until
-
         # Rebuild controller with updated config
         self._controller = self._build_controller(self.config_entry)
+        self._status: ControllerStatus = ControllerStatus.INITIALIZING
+        self._init_started_at: datetime = datetime.now(UTC)
 
         # Restore controller-level state using existing method (V2 format)
         controller_data = saved_state.get("controller", {})
         self._restore_controller_state(controller_data)
-
-        # Restore flush_until (runtime-only state)
-        self._controller.state.flush_until = saved_flush_until
 
         # Restore zone state for zones that still exist using existing method
         new_zone_ids = set(self._controller.zone_ids)
