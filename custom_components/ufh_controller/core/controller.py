@@ -8,7 +8,7 @@ zone control, operation modes, and heat request aggregation.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from custom_components.ufh_controller.const import (
     DEFAULT_CYCLE_MODE_HOURS,
@@ -22,6 +22,7 @@ from custom_components.ufh_controller.const import (
 )
 
 from .heating_curve import HeatingCurveConfig, calculate_supply_target
+from .history import get_observation_start
 from .pid import PIDController
 from .zone import (
     CircuitType,
@@ -50,6 +51,7 @@ class ControllerState:
     zones: dict[str, ZoneState] = field(default_factory=dict)
     outdoor_temp: float | None = None
     supply_target_temp: float | None = None
+    last_force_update: datetime | None = None
 
 
 @dataclass
@@ -513,6 +515,75 @@ class HeatingController:
 
         # Heat and cycle modes depend on heat request
         return SummerMode.WINTER if heat_request else SummerMode.SUMMER
+
+    def update_dhw_state(self, *, dhw_active: bool, now: datetime) -> None:
+        """
+        Update DHW state and manage post-DHW flush timer.
+
+        Detects transitions:
+        - ON→OFF: starts post-flush timer if flush enabled and duration > 0
+        - OFF→ON: clears flush_until timer
+
+        Args:
+            dhw_active: Current DHW active state.
+            now: Current time for flush timer calculation.
+
+        """
+        # Detect DHW OFF transition (was on, now off)
+        if self._state.dhw_active and not dhw_active:
+            flush_duration = self.config.timing.flush_duration
+            if flush_duration > 0 and self._state.flush_enabled:
+                self._state.flush_until = now + timedelta(seconds=flush_duration)
+
+        # Clear flush_until when DHW starts
+        if dhw_active and not self._state.dhw_active:
+            self._state.flush_until = None
+
+        self._state.dhw_active = dhw_active
+
+    def handle_observation_period_transition(self, now: datetime) -> bool:
+        """
+        Update observation period state and return whether a new period started.
+
+        This method:
+        1. Updates observation_start and period_elapsed
+        2. Detects if we've transitioned to a new observation period
+        3. Resets used_duration for all zones on period transition
+        4. Updates last_force_update timestamp
+
+        Args:
+            now: Current time.
+
+        Returns:
+            True if a new observation period started (force update needed).
+
+        """
+        timing = self.config.timing
+        self._state.observation_start = get_observation_start(
+            now, timing.observation_period
+        )
+        self._state.period_elapsed = (
+            now - self._state.observation_start
+        ).total_seconds()
+
+        new_period = (
+            self._state.last_force_update is None
+            or self._state.last_force_update < self._state.observation_start
+        )
+
+        if new_period:
+            for runtime in self._zones.values():
+                runtime.reset_used_duration()
+            self._state.last_force_update = now
+
+        return new_period
+
+    @property
+    def any_zone_in_fail_safe(self) -> bool:
+        """Check if any zone is in fail-safe mode."""
+        return any(
+            rt.state.zone_status == ZoneStatus.FAIL_SAFE for rt in self._zones.values()
+        )
 
     @property
     def zone_ids(self) -> list[str]:
