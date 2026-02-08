@@ -20,73 +20,29 @@ def sensor_entity_prefix() -> str:
     return "sensor.test_zone_1"
 
 
-async def test_duty_cycle_sensor_created(
+@pytest.mark.parametrize(
+    "sensor_name",
+    [
+        "duty_cycle",
+        "pid_error",
+        "pid_proportional",
+        "pid_integral",
+        "pid_derivative",
+        "remaining_duration",
+    ],
+)
+async def test_zone_sensor_created(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     sensor_entity_prefix: str,
+    sensor_name: str,
 ) -> None:
-    """Test duty cycle sensor is created on setup."""
+    """Test zone-level sensors are created on setup."""
     mock_config_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    state = hass.states.get(f"{sensor_entity_prefix}_duty_cycle")
-    assert state is not None
-
-
-async def test_pid_error_sensor_created(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    sensor_entity_prefix: str,
-) -> None:
-    """Test PID error sensor is created on setup."""
-    mock_config_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(mock_config_entry.entry_id)
-    await hass.async_block_till_done()
-
-    state = hass.states.get(f"{sensor_entity_prefix}_pid_error")
-    assert state is not None
-
-
-async def test_pid_proportional_sensor_created(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    sensor_entity_prefix: str,
-) -> None:
-    """Test PID proportional sensor is created on setup."""
-    mock_config_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(mock_config_entry.entry_id)
-    await hass.async_block_till_done()
-
-    state = hass.states.get(f"{sensor_entity_prefix}_pid_proportional")
-    assert state is not None
-
-
-async def test_pid_integral_sensor_created(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    sensor_entity_prefix: str,
-) -> None:
-    """Test PID integral sensor is created on setup."""
-    mock_config_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(mock_config_entry.entry_id)
-    await hass.async_block_till_done()
-
-    state = hass.states.get(f"{sensor_entity_prefix}_pid_integral")
-    assert state is not None
-
-
-async def test_pid_derivative_sensor_created(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    sensor_entity_prefix: str,
-) -> None:
-    """Test PID derivative sensor is created on setup."""
-    mock_config_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(mock_config_entry.entry_id)
-    await hass.async_block_till_done()
-
-    state = hass.states.get(f"{sensor_entity_prefix}_pid_derivative")
+    state = hass.states.get(f"{sensor_entity_prefix}_{sensor_name}")
     assert state is not None
 
 
@@ -117,9 +73,9 @@ async def test_sensor_count_with_zone(
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    # 5 zone sensors + 3 controller sensors (zones_flowing/heating/window) = 8 total
+    # 6 zone sensors + 3 controller sensors (zones_flowing/heating/window) = 9 total
     states = hass.states.async_entity_ids(SENSOR_DOMAIN)
-    assert len(states) == 8
+    assert len(states) == 9
 
 
 async def test_no_zone_sensors_without_zones(
@@ -168,6 +124,7 @@ async def test_zone_sensor_unavailable_during_fail_safe(
         "pid_proportional",
         "pid_integral",
         "pid_derivative",
+        "remaining_duration",
     ]:
         state = hass.states.get(f"{sensor_entity_prefix}_{sensor_suffix}")
         assert state is not None, f"Sensor {sensor_suffix} not found"
