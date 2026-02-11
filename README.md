@@ -20,7 +20,7 @@ The Home Assistant thermostat ecosystem has excellent options for TRVs ([Better 
 | **Boiler/heat pump signaling** | Basic on/off or none | Valve pre-opening, quota-aware requests |
 | **EMS-ESP boiler integration** | Manual automations required | Native summer mode, DHW detection |
 | **Heat accounting** | Not supported | Supply temperature weighted quota allocation |
-| **DHW priority handling** | Not supported | Blocks new heating during DHW, captures latent heat |
+| **DHW priority handling** | Not supported | Blocks new heating during DHW, captures residual heat |
 | **Weather compensation** | Manual automations or none | Built-in heating curve from outdoor sensor |
 | **UFH thermal response** | Adapted from radiator/TRV logic | Native PID tuned for slow thermal mass |
 
@@ -70,7 +70,7 @@ For users with Bosch, Buderus, Nefit, Junkers, or Worcester boilers running [EMS
 
 - **Summer mode control** - Disables heating circuit when no zones need heat
 - **DHW priority detection** - Blocks new heating cycles during hot water, existing zones continue circulating
-- **Latent heat capture** - Zones configured as flush circuits capture residual boiler heat after DHW
+- **Residual heat capture** - Flush circuits capture residual heat from the boiler after DHW ends
 
 ### Zone Fault Isolation
 
@@ -97,7 +97,7 @@ Sensor failures in one zone don't bring down your heating:
   - Temperature sensor per zone
   - Valve switch per zone
   - (Optional) Boiler heat request switch or summer mode control
-  - (Optional) DHW active sensor for latent heat capture
+  - (Optional) DHW active sensor for residual heat capture
   - (Optional) Outdoor temperature sensor for weather compensation
   - (Optional) Window/door sensors (pauses PID integration, prevents integral windup)
   - (Optional) Supply temperature sensor for heat accounting
