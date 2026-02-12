@@ -11,10 +11,32 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
+from homeassistant.components import recorder as ha_recorder
+from homeassistant.components.recorder.history import state_changes_during_period
+
 from .const import DEFAULT_WINDOW_OPEN_THRESHOLD
 
 if TYPE_CHECKING:
-    from homeassistant.core import HomeAssistant
+    from homeassistant.core import HomeAssistant, State
+
+
+async def _query_entity_states(
+    hass: HomeAssistant,
+    entity_id: str,
+    start: datetime,
+    end: datetime,
+) -> list[State] | None:
+    """Query recorder for entity state changes, returning None if empty."""
+    states = await ha_recorder.get_instance(hass).async_add_executor_job(
+        state_changes_during_period,
+        hass,
+        start,
+        end,
+        entity_id,
+    )
+
+    entity_states = states.get(entity_id)
+    return entity_states if entity_states else None
 
 
 async def get_state_average(
@@ -44,26 +66,11 @@ async def get_state_average(
         SQLAlchemyError: If Recorder query fails.
 
     """
-    # Import here to allow testing without HA recorder
-    from homeassistant.components.recorder import get_instance  # noqa: PLC0415
-    from homeassistant.components.recorder.history import (  # noqa: PLC0415
-        state_changes_during_period,
-    )
-
     total_time = (end - start).total_seconds()
     if total_time <= 0:
         return 0.0
 
-    # Query recorder for state changes
-    states = await get_instance(hass).async_add_executor_job(
-        state_changes_during_period,
-        hass,
-        start,
-        end,
-        entity_id,
-    )
-
-    entity_states = states.get(entity_id)
+    entity_states = await _query_entity_states(hass, entity_id, start, end)
     if not entity_states:
         # No state changes - check current state
         current_state = hass.states.get(entity_id)
@@ -87,6 +94,70 @@ async def get_state_average(
             total_on_time += duration
 
     return total_on_time / total_time
+
+
+async def get_valve_position(  # noqa: PLR0913
+    hass: HomeAssistant,
+    entity_id: str,
+    start: datetime,
+    end: datetime,
+    valve_open_time: int,
+    valve_close_time: int,
+    on_value: str = "on",
+) -> float:
+    """
+    Estimate physical valve position by walking through state change history.
+
+    Models thermal-wax actuator ramp-up (when powered) and ramp-down
+    (passive wax cooling + spring return) to estimate how open the valve
+    physically is at the end of the window.
+
+    Args:
+        hass: Home Assistant instance.
+        entity_id: Entity ID to query.
+        start: Start of the time period.
+        end: End of the time period.
+        valve_open_time: Time in seconds for valve to fully open.
+        valve_close_time: Time in seconds for valve to fully close.
+        on_value: State value considered "on" (default "on").
+
+    Returns:
+        Valve position as a ratio (0.0 to 1.0).
+
+    Raises:
+        SQLAlchemyError: If Recorder query fails.
+
+    """
+    entity_states = await _query_entity_states(hass, entity_id, start, end)
+    if not entity_states:
+        # No state changes - check current state
+        current_state = hass.states.get(entity_id)
+        if current_state and current_state.state == on_value:
+            return 1.0
+        return 0.0
+
+    # Initial position based on first recorded state
+    position = 1.0 if entity_states[0].state == on_value else 0.0
+
+    # Walk through state change segments
+    for i, state in enumerate(entity_states):
+        segment_start = max(state.last_changed, start)
+        if i + 1 < len(entity_states):
+            segment_end = entity_states[i + 1].last_changed
+        else:
+            segment_end = end
+
+        duration = (segment_end - segment_start).total_seconds()
+
+        if state.state == on_value:
+            # Valve powering open: ramp up
+            if valve_open_time > 0:
+                position = min(1.0, position + duration / valve_open_time)
+        # Valve closing passively: ramp down
+        elif valve_close_time > 0:
+            position = max(0.0, position - duration / valve_close_time)
+
+    return position
 
 
 async def was_any_window_open_recently(

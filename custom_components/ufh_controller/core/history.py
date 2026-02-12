@@ -36,19 +36,25 @@ def get_observation_start(
     return midnight + timedelta(seconds=period_index * observation_period)
 
 
-def get_valve_open_window(
-    now: datetime, valve_open_time: int = DEFAULT_TIMING["valve_open_time"]
+def get_valve_position_window(
+    now: datetime,
+    valve_open_time: int,
+    valve_close_time: int,
 ) -> tuple[datetime, datetime]:
     """
-    Get the time window for valve open detection.
+    Get the time window for valve position estimation.
+
+    The window spans both open and close times to provide enough history
+    to estimate position through both opening and closing transitions.
 
     Args:
         now: Current datetime.
-        valve_open_time: Detection window in seconds (default 210 = 3.5 minutes).
+        valve_open_time: Time for valve to fully open in seconds.
+        valve_close_time: Time for valve to fully close in seconds.
 
     Returns:
-        Tuple of (start, end) datetime for valve open detection.
+        Tuple of (start, end) datetime for valve position detection.
 
     """
-    start = now - timedelta(seconds=valve_open_time)
+    start = now - timedelta(seconds=valve_open_time + valve_close_time)
     return (start, now)
