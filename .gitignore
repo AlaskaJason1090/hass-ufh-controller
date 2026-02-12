@@ -17,6 +17,7 @@ coverage.json
 .idea
 .vscode
 .aider*
+.claude
 .env
 .env.*
 notes/
