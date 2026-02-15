@@ -95,7 +95,7 @@ Multiple UFH zones sharing one heat source need coordination that per-zone therm
 
 ### Hot Water Priority
 
-When someone takes a shower, generic thermostats either fight the heat source for priority or don't know DHW is happening. This controller:
+When domestic hot water is being heated, generic thermostats either fight the heat source for priority or don't know DHW is happening. This controller:
 
 - **Blocks new heating** during DHW — zones already flowing continue circulating, but new zones wait
 - **Captures residual heat** — after DHW finishes, hot water still in the system gets circulated through floors instead of wasted
@@ -194,3 +194,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing requiremen
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
+
