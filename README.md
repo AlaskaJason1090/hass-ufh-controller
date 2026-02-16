@@ -2,7 +2,7 @@
 
 [![GitHub Release](https://img.shields.io/github/v/release/lnagel/hass-ufh-controller?style=flat-square)](https://github.com/lnagel/hass-ufh-controller/releases)
 [![License](https://img.shields.io/github/license/lnagel/hass-ufh-controller?style=flat-square)](LICENSE)
-[![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=flat-square)](https://hacs.xyz/)
+[![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=flat-square)](https://my.home-assistant.io/redirect/hacs_repository/?owner=lnagel&repository=hass-ufh-controller&category=integration)
 [![CI](https://img.shields.io/github/actions/workflow/status/lnagel/hass-ufh-controller/checks.yml?branch=main&style=flat-square&label=tests)](https://github.com/lnagel/hass-ufh-controller/actions)
 [![codecov](https://codecov.io/gh/lnagel/hass-ufh-controller/branch/main/graph/badge.svg)](https://codecov.io/gh/lnagel/hass-ufh-controller)
 
@@ -157,6 +157,8 @@ This code controls heating for real homes. A bug can mean frozen pipes, burst pl
 - **Structured releases** — pre-release cycle (dev.1 > dev.2 > ... > stable) for each version
 
 ## Installation
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=lnagel&repository=hass-ufh-controller&category=integration)
 
 ### HACS (Recommended)
 
